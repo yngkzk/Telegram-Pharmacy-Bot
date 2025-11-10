@@ -1,2 +1,2 @@
-# Telegram-Pharmacy-Bot
+# telegram-pharmacy-bot
 
