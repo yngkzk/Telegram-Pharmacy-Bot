@@ -78,3 +78,4 @@ dist/
 tmp/
 temp/
 __temp__/
+/main/utils/config
