@@ -40,6 +40,7 @@ bot.log
 Thumbs.db
 .cache/
 __pycache__/
+testcommands.py
 
 # === Databases ===
 *.db
