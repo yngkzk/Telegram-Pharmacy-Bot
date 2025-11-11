@@ -61,10 +61,16 @@ async def add_lpu_url(message: Message, state: FSMContext):
 
     name, district, road = await TempDataManager.get_many(state, "lpu_name", "district", "road")
 
-    # Добавляем в БД
-    pharmacyDB.add_lpu(district, road, name, url)
+    logger.info(f"Полученные данные {road, name, url}")
 
-    logger.info(f"Пользователь {message.from_user.first_name} - Добавил новое ЛПУ - Название - {name}, Ссылка - {url}")
+    # Добавляем в БД
+    pharmacyDB.add_lpu(road, name, url)
+
+    logger.info(f"Пользователь {message.from_user.first_name} -"
+                f" Добавил новое ЛПУ - "
+                f"Название - {name}, "
+                f"Ссылка - {url}"
+                f"Маршрут - {road}")
 
     # Обновляем клавиатуру
     keyboard = await get_lpu_inline(state, district, road)
@@ -130,6 +136,15 @@ async def add_doctor_num(message: Message, state: FSMContext):
         await message.answer("☎️ Номер не распознан или отсутствует. Продолжаем без него.")
     else:
         await message.answer(f"✅ Номер сохранён: {phone}")
+
+    # Вытаскиваем данные
+    lpu_id, doctor_name, spec_id, number = await TempDataManager.get_many(state, "lpu_id",
+                                                                          "tp_dr_name",
+                                                                          "tp_dr_spec",
+                                                                          "tp_dr_phone")
+
+    # Добавляем врача в БД
+    pharmacyDB.add_doc(lpu_id, doctor_name, spec_id, number)
 
     # Дальнейшие действия
     await message.answer("✅ Врач успешно добавлен в систему!")
