@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
@@ -26,6 +26,9 @@ async def add_item(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     logger.info(f"🧭 Текущее состояние: {current_state}")
 
+    # Убираю клавиатуру
+    await callback.message.edit_reply_markup(reply_markup=None)
+
     prefix = callback.data.split("_")[1]  # например "lpu" или "doc"
     # Определяем, что добавить
     if prefix == "lpu":
@@ -45,27 +48,30 @@ async def add_item(callback: CallbackQuery, state: FSMContext):
 @router.message(AddPharmacy.waiting_for_name)
 async def add_lpu_name(message: Message, state: FSMContext):
     name = message.text.strip()
-    await state.update_data({"new_lpu_name": name})
-    await message.answer("Отправьте ссылку (URL) для этого ЛПУ:")
-    await state.set_state(AddState.waiting_for_url)
+    await TempDataManager.set(state, key="lpu_name", value=name)
+    await message.answer("Отправьте ссылку (URL) для этого ЛПУ через 2gis:")
+    await state.set_state(AddPharmacy.waiting_for_url)
+
+    logger.info(f"Пользователь {message.from_user.first_name} - Добавляет ЛПУ - Название {name}")
 
 
 @router.message(AddPharmacy.waiting_for_url)
 async def add_lpu_url(message: Message, state: FSMContext):
     url = message.text.strip()
-    data = await state.get_data()
 
-    district, road = await TempDataManager.get_by_mode(state, mode=2)
+    name, district, road = await TempDataManager.get_many(state, "lpu_name", "district", "road")
 
     # Добавляем в БД
-    pharmacyDB.add_lpu(district, road, data["new_lpu_name"], url)
+    pharmacyDB.add_lpu(district, road, name, url)
+
+    logger.info(f"Пользователь {message.from_user.first_name} - Добавил новое ЛПУ - Название - {name}, Ссылка - {url}")
 
     # Обновляем клавиатуру
     keyboard = await get_lpu_inline(state, district, road)
     await message.answer("✅ ЛПУ успешно добавлено!", reply_markup=keyboard)
 
 
-# === Подтвердить добавление врача ===
+# === Подтверждение ФИО врача ===
 @router.message(AddDoctor.waiting_for_name)
 async def add_doctor_confirmation(message: Message, state: FSMContext):
     fio = message.text.strip()
@@ -74,38 +80,57 @@ async def add_doctor_confirmation(message: Message, state: FSMContext):
     await state.set_state(AddDoctor.waiting_for_spec)
 
     logger.info(f"Результат в add_doctor_confirm - {fio}")
-    await message.answer(f"Вы ввели ФИО: \n{text_utils.check_name(fio)}, \nподтвердите действие.",
-                         reply_markup=get_confirm_inline())
+    await message.answer(
+        f"Вы ввели ФИО:\n{text_utils.check_name(fio)}\nПодтвердите действие.",
+        reply_markup=get_confirm_inline()
+    )
 
-# === Получаем специальность врача ===
+
+# === Ввод специальности врача (текстом) ===
 @router.message(AddDoctor.waiting_for_spec)
-@router.callback_query(F.data.startswith("main_spec_"))
-async def add_doctor_spec(event: Message | CallbackQuery, state: FSMContext):
-    """
-    Обрабатывает выбор/ввод специальности врача.
-    Работает как на сообщение, так и на callback от inline-кнопок.
-    """
-    await event.answer()
-    doctor_name = await TempDataManager.get(state, key="tp_dr_name")
+async def add_doctor_spec_text(message: Message, state: FSMContext):
+    spec = message.text.strip()
+    await TempDataManager.set(state, key="tp_dr_spec", value=spec)
+    await state.set_state(AddDoctor.waiting_for_number)
 
-    # Определяем, пришло ли это сообщение или callback
-    if isinstance(event, CallbackQuery):
-        spec = event.data.replace("main_spec_", "").strip()
-        send = event.message
-    else:
-        spec = event.text.strip()
-        send = event
-
-    # Получаем LPU из FSM
     district, road, lpu, lpu_id = await TempDataManager.get_many(state, "district", "road", "lpu_name", "lpu_id")
+    doctor_name = await TempDataManager.get(state, "tp_dr_name")
 
-    # Добавляем врача в базу
-    # add_doctor_to_db(doctor_name, spec, lpu)
-
-    # Для отладки
     logger.info(f"✅ Добавлен врач: {doctor_name}, спец: {spec}, LPU: {lpu}")
-    logger.info(f"District - {district}, Road - {road}, lpu - {lpu}")
+    await message.answer("Введите номер телефона врача (или 'нет').")
 
-    # Показываем обновлённый список врачей
-    keyboard = await get_doctors_inline(state, lpu_id)
-    await send.answer("✅ Врач успешно добавлен!", reply_markup=keyboard)
+
+# === Выбор специальности врача через inline-кнопки ===
+@router.callback_query(F.data.startswith("main_spec_"))
+async def add_doctor_spec_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    spec = callback.data.replace("main_spec_", "").strip()
+
+    await TempDataManager.set(state, key="tp_dr_spec", value=spec)
+    await state.set_state(AddDoctor.waiting_for_number)
+
+    district, road, lpu, lpu_id = await TempDataManager.get_many(state, "district", "road", "lpu_name", "lpu_id")
+    doctor_name = await TempDataManager.get(state, "tp_dr_name")
+
+    logger.info(f"✅ Добавлен врач: {doctor_name}, спец: {spec}, LPU: {lpu}")
+    await callback.message.answer("Введите номер телефона врача (или 'нет').")
+
+
+# === Получаем номер врача ===
+@router.message(AddDoctor.waiting_for_number)
+async def add_doctor_num(message: Message, state: FSMContext):
+    raw_input = message.text.strip()
+    phone = text_utils.validate_phone_number(raw_input)
+
+    await TempDataManager.set(state, key="tp_dr_phone", value=phone)
+    logger.info(f"Сохранён номер телефона: {phone}"
+                f"\nТип данных: {type(phone)}")
+
+    if phone is None:
+        await message.answer("☎️ Номер не распознан или отсутствует. Продолжаем без него.")
+    else:
+        await message.answer(f"✅ Номер сохранён: {phone}")
+
+    # Дальнейшие действия
+    await message.answer("✅ Врач успешно добавлен в систему!")
+    await state.clear()

@@ -1,3 +1,7 @@
+import re
+from utils.logger_config import logger
+
+
 def shorten_name(full_name: str) -> str:
     """
     Всегда сокращает ФИО врачей до формата:
@@ -46,3 +50,27 @@ def check_name(full_name: str) -> str:
         last_name, first_name, *middle = parts
         middle_name = " ".join(middle)
         return f"Фамилия: {last_name}\nИмя: {first_name}\nОтчество (при наличии): {middle_name}"
+
+def validate_phone_number(text: str) -> str | None:
+    """
+    Проверяет введённый текст на соответствие формату номера телефона.
+    Возвращает очищенный номер (например, +77071234567) или None.
+    """
+    text = text.strip()
+
+    # Разрешаем ввод "нет", "отсутствует" и т.п.
+    if text.lower() in {"нет", "не знаю", "—", "-"}:
+        logger.info("Пользователь указал, что номера нет.")
+        return None
+
+    # Убираем пробелы, тире, скобки
+    clean = re.sub(r"[^\d+]", "", text)
+
+    # Проверяем, что остались только цифры (и, возможно, ведущий '+')
+    if re.fullmatch(r"\+?\d{7,15}", clean):
+        logger.info(f"✅ Введён валидный номер телефона: {clean}")
+        return clean
+
+    # Если не похоже на номер — возвращаем None
+    logger.warning(f"⚠️ Невалидный номер телефона: {text}")
+    return None

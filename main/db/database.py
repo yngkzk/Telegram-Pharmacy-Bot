@@ -46,6 +46,9 @@ class BotDB:
                             (road_id, pharmacy_name, pharmacy_url))
         return self.conn.commit()
 
+    def add_doc(self, lpu_id, doctor_name, spec_id, number):
+        pass
+
     def is_logged_in(self, user_id: int) -> bool:
         """
         Проверяет, вошёл ли пользователь в систему.
