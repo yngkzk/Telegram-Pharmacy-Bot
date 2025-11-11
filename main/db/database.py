@@ -149,3 +149,16 @@ class BotDB:
         result = self.cursor.execute(query).fetchall()
 
         return result
+
+    def get_prep_list(self):
+        """
+        Возвращет список препаратов.
+        """
+
+        query = """
+            SELECT id, prep
+            FROM medication
+        """
+        result = self.cursor.execute(query).fetchall()
+
+        return result

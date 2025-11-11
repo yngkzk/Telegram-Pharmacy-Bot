@@ -1,5 +1,3 @@
-from idlelib.editor import keynames
-
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters.callback_data import CallbackData
@@ -224,4 +222,14 @@ async def get_doctors_inline(state, lpu) -> InlineKeyboardMarkup:
     logger.info(f"items in get_doctors - {items}")
     keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="doc", row_width=2,
                                              add_back=True, add_button=True)
+    return keyboard
+
+
+# === inline список Препаратов ===
+async def get_prep_inline(state) -> InlineKeyboardMarkup:
+    """Создаёт inline-клавиатуру со списком препаратов"""
+    items = pharmacyDB.get_prep_list()
+    logger.info(f"ДБ pharmacy.db - результат {items}")
+    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="prep", row_width=2,
+                                             add_back=True, add_button=False)
     return keyboard

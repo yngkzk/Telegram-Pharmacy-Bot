@@ -214,9 +214,7 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, key="lpu_name", value=lpu_name)
     await TempDataManager.set(state, key="lpu_id", value=lpu_id)
 
-
     logger.info(f"urls - {await TempDataManager.get(state, key="lpu_url")}")
-
     logger.info(f"lpu_selected - {lpu_name}, {lpu_id}")
 
     # Создаем клавиатуру
@@ -227,3 +225,29 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text="🥼 Выберите врача",
                                      reply_markup=keyboard)
 
+
+# === Выбор Врача ===
+@router.callback_query(F.data.startswith("doc_"))
+async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем имя и ID Врача
+    doc_name = await TempDataManager.get_button_name(state, callback.data)
+    doc_id = callback.data.replace("doc_", "")
+
+    # Сохраняем выбор в FSMContext
+    await TempDataManager.set(state, key="doc_name", value=doc_name)
+    await TempDataManager.set(state, key="doc_id", value=doc_id)
+
+    logger.info(f"Пользователь {callback.from_user.first_name} - Выбрал врача - {doc_name, doc_id}")
+
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_prep_inline(state)
+
+    # Отвечаем пользователю
+    await callback.message.answer(text=f"✅ Вы выбрали врача - {doc_name}")
+    await callback.message.edit_text(text="💊 Выберите препарат", reply_markup=keyboard)
+
+
+# === Выбор Препарата ===
+@router.callback_query(F.data.startswith("prep_"))
+async def prep_selected(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем название и ID врача
