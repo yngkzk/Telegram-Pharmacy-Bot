@@ -250,4 +250,17 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
 # === Выбор Препарата ===
 @router.callback_query(F.data.startswith("prep_"))
 async def prep_selected(callback: types.CallbackQuery, state: FSMContext):
-    # Извлекаем название и ID врача
+    # Извлекаем название и ID Препарата
+    prep_name = await TempDataManager.get_button_name(state, callback.data)
+    prep_id = callback.data.replace("prep_", "")
+
+    # Сохраняем выбор в FSMContext
+    await TempDataManager.set(state, key="prep_name", value=prep_name)
+    await TempDataManager.set(state, key="prep_id", value=prep_id)
+
+    # Проверить, был ли до этого Врач в БД, чтобы показать договоренность
+    # pharmacyDB.check_doc( )
+    # Надо написать 2 БД, одну для докторов и посещение, вторую для детального отчета посещении, где будет 1 строка - 1 препарат
+
+
+    logger.info(f"Пользователь {callback.from_user.first_name} дошел до участка кода - {state}")
