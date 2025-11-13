@@ -2,9 +2,11 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 
-from keyboard import inline_buttons, reply_buttons
+from keyboard import inline_buttons, reply_buttons, inline_select
+from six import iteritems
 from states.main_menu_state import MainMenu
 from states.add_state import AddDoctor, AddPharmacy
+from states.prescription_state import PrescriptionFSM
 
 from loader import accountantDB, pharmacyDB
 from storage.temp_data import TempDataManager
@@ -66,24 +68,32 @@ async def confirm_no(callback: types.CallbackQuery, state: FSMContext):
 
 # === Меню пользователя ===
 @router.callback_query(F.data == "user_road")
-async def user_road(callback: types.CallbackQuery):
+async def user_road(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "📍 Вы открыли раздел 'Маршрут'\nВыберите район.",
         reply_markup=inline_buttons.get_district_inline()
     )
+    await state.set_state(PrescriptionFSM.choose_lpu)
+
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
 
 
-@router.callback_query(F.data == "user_lpu")
+@router.callback_query(F.data == "user_lpu", PrescriptionFSM.choose_lpu)
 async def user_lpu(callback: types.CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     district = data.get("selected_district")
     road = data.get("selected_road")
 
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+
     if district and road:
         keyboard = await inline_buttons.get_lpu_inline(state, district, road)
         await callback.message.edit_text("📍 Выберите ЛПУ",
                                          reply_markup=keyboard)
+        await state.set_state(PrescriptionFSM.choose_doctor)
     else:
         await callback.message.edit_text("🏥 Сначала выберите маршрут!",
                                          reply_markup=inline_buttons.get_district_inline())
@@ -175,6 +185,9 @@ async def district_selected(callback: types.CallbackQuery, state: FSMContext):
     # Сохраняем выбор в FSMContext
     await TempDataManager.set(state, key="district", value=district)
 
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+
     # Отвечаем пользователю
     await callback.message.answer(text=f"✅ Вы выбрали район: {district}")
     await callback.message.edit_text(text="🗺 Выберите маршрут",
@@ -193,7 +206,10 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
     # Вытаскиваем район
     district = await TempDataManager.get(state, key="district")
 
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Район - district, Номер маршрута - road_num")
+
     # Создаем клавиатуру
     keyboard = await inline_buttons.get_lpu_inline(state, district, road_num)
 
@@ -204,7 +220,7 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
 
 
 # === Выбор ЛПУ ===
-@router.callback_query(F.data.startswith("lpu_"))
+@router.callback_query(F.data.startswith("lpu_"), PrescriptionFSM.choose_lpu)
 async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     # Извлекаем название и ID ЛПУ
     lpu_name = await TempDataManager.get_button_name(state, callback.data)
@@ -214,6 +230,11 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, key="lpu_name", value=lpu_name)
     await TempDataManager.set(state, key="lpu_id", value=lpu_id)
 
+    # Задаю новый FSM
+    await state.set_state(PrescriptionFSM.choose_doctor)
+
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"urls - {await TempDataManager.get(state, key="lpu_url")}")
     logger.info(f"lpu_selected - {lpu_name}, {lpu_id}")
 
@@ -227,8 +248,9 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
 
 
 # === Выбор Врача ===
-@router.callback_query(F.data.startswith("doc_"))
+@router.callback_query(F.data.startswith("doc_"), PrescriptionFSM.choose_doctor)
 async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
+
     # Извлекаем имя и ID Врача
     doc_name = await TempDataManager.get_button_name(state, callback.data)
     doc_id = callback.data.replace("doc_", "")
@@ -237,30 +259,17 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, key="doc_name", value=doc_name)
     await TempDataManager.set(state, key="doc_id", value=doc_id)
 
-    logger.info(f"Пользователь {callback.from_user.first_name} - Выбрал врача - {doc_name, doc_id}")
+    # Задаю новый FSM
+    await state.set_state(PrescriptionFSM.choose_meds)
 
-    # Создаем клавиатуру
-    keyboard = await inline_buttons.get_prep_inline(state)
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+    logger.info(f"Пользователь {callback.from_user.first_name} - Выбрал врача - {doc_name, doc_id}")
 
     # Отвечаем пользователю
     await callback.message.answer(text=f"✅ Вы выбрали врача - {doc_name}")
-    await callback.message.edit_text(text="💊 Выберите препарат", reply_markup=keyboard)
+    await TempDataManager.set(state, "selected_items", [])
 
 
-# === Выбор Препарата ===
-@router.callback_query(F.data.startswith("prep_"))
-async def prep_selected(callback: types.CallbackQuery, state: FSMContext):
-    # Извлекаем название и ID Препарата
-    prep_name = await TempDataManager.get_button_name(state, callback.data)
-    prep_id = callback.data.replace("prep_", "")
-
-    # Сохраняем выбор в FSMContext
-    await TempDataManager.set(state, key="prep_name", value=prep_name)
-    await TempDataManager.set(state, key="prep_id", value=prep_id)
-
-    # Проверить, был ли до этого Врач в БД, чтобы показать договоренность
-    # pharmacyDB.check_doc( )
-    # Надо написать 2 БД, одну для докторов и посещение, вторую для детального отчета посещении, где будет 1 строка - 1 препарат
-
-
-    logger.info(f"Пользователь {callback.from_user.first_name} дошел до участка кода - {state}")
+    await callback.message.edit_text("🏥 Выберите один или несколько препаратов:",
+                                     reply_markup=inline_select.get_prep_inline())

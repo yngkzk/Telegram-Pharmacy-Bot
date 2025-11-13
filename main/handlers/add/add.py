@@ -4,8 +4,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 from loader import pharmacyDB
-from numpy.f2py.cfuncs import callbacks
-from pandas.core.common import temp_setattr
 from storage.temp_data import TempDataManager
 
 from states.add_state import AddDoctor, AddPharmacy

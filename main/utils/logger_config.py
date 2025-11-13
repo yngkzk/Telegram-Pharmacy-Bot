@@ -14,7 +14,7 @@ def setup_logger(name: str = "bot", log_dir: str = "logs", max_bytes: int = 2_00
 
     # Настройка логгера
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # Консольный вывод
     console_handler = logging.StreamHandler()

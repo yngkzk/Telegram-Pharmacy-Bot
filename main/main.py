@@ -4,7 +4,7 @@ from aiogram import types, F
 from aiogram.filters import Command
 
 from loader import accountantDB, dp, bot
-from handlers import register, main_menu
+from handlers import register, main_menu, select_handlers, tota_and_comms
 
 from handlers.add import add
 from handlers.callbacks import general_callbacks
@@ -17,6 +17,8 @@ async def main(): # Запускаем бота асинхронно
     dp.include_router(main_menu.router)
     dp.include_router(add.router)
     dp.include_router(general_callbacks.router)
+    dp.include_router(select_handlers.router)
+    dp.include_router(tota_and_comms.router)
     setup_error_handler(dp)
 
     await dp.start_polling(bot)

@@ -114,11 +114,17 @@ async def build_shortcut_keyboard(
 
 
 # === подтверждение действий ===
-def get_confirm_inline() -> InlineKeyboardMarkup:
-    items = [
-        ("✅ Подтвердить", "confirm_yes"),
-        ("❌ Отменить", "confirm_no")
-    ]
+def get_confirm_inline(mode) -> InlineKeyboardMarkup:
+    if mode:
+        items = [
+            ("📖 Посмотреть", "show_card"),
+            ("📝 Загрузить", "mp_up")
+        ]
+    else:
+        items = [
+            ("✅ Подтвердить", "confirm_yes"),
+            ("❌ Отменить", "confirm_no")
+        ]
     return build_inline_keyboard(items, row_width=2)
 
 def get_cancel_inline() -> InlineKeyboardMarkup:
