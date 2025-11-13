@@ -3,11 +3,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 from storage.temp_data import TempDataManager
-from keyboard import inline_buttons
+from keyboard.inline import inline_buttons
 
 from loader import pharmacyDB
-from utils.logger_config import logger
-from states.prescription_state import PrescriptionFSM
+from utils.logger.logger_config import logger
+from states.add.prescription_state import PrescriptionFSM
 
 
 router = Router()

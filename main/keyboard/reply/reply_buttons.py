@@ -3,7 +3,7 @@ from idlelib.editor import keynames
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, KeyboardButtonPollType
 from loader import accountantDB, pharmacyDB
 
-from utils.logger_config import logger
+from utils.logger.logger_config import logger
 
 
 # === Универсальный генератор клавиатуры ===

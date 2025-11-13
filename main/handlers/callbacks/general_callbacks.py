@@ -2,16 +2,17 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 
-from keyboard import inline_buttons, reply_buttons, inline_select
-from six import iteritems
-from states.main_menu_state import MainMenu
-from states.add_state import AddDoctor, AddPharmacy
-from states.prescription_state import PrescriptionFSM
+from keyboard.inline import inline_buttons, inline_select
+from keyboard.reply import reply_buttons
+
+from states.menu.main_menu_state import MainMenu
+from states.add.add_state import AddDoctor, AddPharmacy
+from states.add.prescription_state import PrescriptionFSM
 
 from loader import accountantDB, pharmacyDB
 from storage.temp_data import TempDataManager
 
-from utils.logger_config import logger
+from utils.logger.logger_config import logger
 
 
 router = Router()

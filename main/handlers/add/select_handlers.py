@@ -3,10 +3,10 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 from storage.temp_data import TempDataManager
-from keyboard.inline_select import build_multi_select_keyboard
+from keyboard.inline.inline_select import build_multi_select_keyboard
 from loader import pharmacyDB
-from utils.logger_config import logger
-from states.prescription_state import PrescriptionFSM
+from utils.logger.logger_config import logger
+from states.add.prescription_state import PrescriptionFSM
 
 
 router = Router()

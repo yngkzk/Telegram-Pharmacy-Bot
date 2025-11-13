@@ -5,14 +5,15 @@ from aiogram.types import ReplyKeyboardRemove
 
 from loader import accountantDB
 
-from states.main_menu_state import MainMenu
-from states.register_state import Register
+from states.menu.main_menu_state import MainMenu
+from states.menu.register_state import Register
 
 from filters.is_logged_in import IsLoggedInFilter
 
-from utils.ui_helper import send_inline_menu
+from utils.ui.ui_helper import send_inline_menu
 
-from keyboard import reply_buttons, inline_buttons
+from keyboard.reply import reply_buttons
+from keyboard.inline import inline_buttons
 
 router = Router()
 

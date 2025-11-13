@@ -4,9 +4,10 @@ from aiogram import types, F
 from aiogram.filters import Command
 
 from loader import accountantDB, dp, bot
-from handlers import register, main_menu, select_handlers, tota_and_comms
 
-from handlers.add import add
+from handlers.menu import register, main_menu
+from handlers.add import add, select_handlers, tota_and_comms
+
 from handlers.callbacks import general_callbacks
 
 from middlewares.error_handler import setup_error_handler

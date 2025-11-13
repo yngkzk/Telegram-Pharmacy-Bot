@@ -1,5 +1,5 @@
 import re
-from utils.logger_config import logger
+from utils.logger.logger_config import logger
 
 
 def shorten_name(full_name: str) -> str:

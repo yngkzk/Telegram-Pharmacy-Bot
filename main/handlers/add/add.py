@@ -6,11 +6,11 @@ from aiogram.fsm.state import StatesGroup, State
 from loader import pharmacyDB
 from storage.temp_data import TempDataManager
 
-from states.add_state import AddDoctor, AddPharmacy
-from keyboard.inline_buttons import get_lpu_inline, get_doctors_inline, get_spec_inline, get_confirm_inline
+from states.add.add_state import AddDoctor, AddPharmacy
+from keyboard.inline.inline_buttons import get_lpu_inline, get_doctors_inline, get_spec_inline, get_confirm_inline
 
-from utils import text_utils
-from utils.logger_config import logger
+from utils.text import text_utils
+from utils.logger.logger_config import logger
 
 
 router = Router()

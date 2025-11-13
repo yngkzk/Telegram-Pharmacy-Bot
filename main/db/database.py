@@ -1,8 +1,8 @@
 import sqlite3
 
 from datetime import datetime
-from utils import pw
-from utils.logger_config import logger
+from utils.text import pw
+from utils.logger.logger_config import logger
 
 
 class BotDB:

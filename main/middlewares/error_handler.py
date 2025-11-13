@@ -2,7 +2,7 @@ from aiogram import F
 from aiogram.types import Update
 from aiogram.exceptions import TelegramBadRequest
 
-from utils.logger_config import logger
+from utils.logger.logger_config import logger
 
 
 def setup_error_handler(dp):

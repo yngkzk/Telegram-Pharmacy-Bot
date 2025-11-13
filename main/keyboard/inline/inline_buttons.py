@@ -4,8 +4,8 @@ from aiogram.filters.callback_data import CallbackData
 
 from loader import accountantDB, pharmacyDB
 
-from utils.text_utils import shorten_name
-from utils.logger_config import logger
+from utils.text.text_utils import shorten_name
+from utils.logger.logger_config import logger
 
 from storage.temp_data import TempDataManager
 

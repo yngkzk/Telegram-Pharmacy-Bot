@@ -2,13 +2,15 @@ from aiogram import types, Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 
-from states.register_state import Register, LoginFSM
-from states.main_menu_state import MainMenu
+from states.menu.register_state import Register, LoginFSM
+from states.menu.main_menu_state import MainMenu
 
 from loader import accountantDB
 
-from utils.pw import hash_password
-from keyboard import reply_buttons, inline_buttons
+from utils.text.pw import hash_password
+from keyboard.reply import reply_buttons
+from keyboard.inline import inline_buttons
+
 
 router = Router()
 
