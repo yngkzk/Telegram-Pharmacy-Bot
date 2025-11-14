@@ -86,7 +86,7 @@ async def add_doctor_confirmation(message: Message, state: FSMContext):
     logger.info(f"Результат в add_doctor_confirm - {fio}")
     await message.answer(
         f"Вы ввели ФИО:\n{text_utils.check_name(fio)}\nПодтвердите действие.",
-        reply_markup=get_confirm_inline()
+        reply_markup=get_confirm_inline(mode=False)
     )
 
 
