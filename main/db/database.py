@@ -46,11 +46,11 @@ class BotDB:
                             (road_id, pharmacy_name, pharmacy_url))
         return self.conn.commit()
 
-    def add_doc(self, lpu_id, doctor_name, spec_id, number):
+    def add_doc(self, lpu_id, doctor_name, spec_id, number, birthdate):
         """Добавляем нового врача в БД"""
-        self.cursor.execute("INSERT INTO `doctors` (`lpu_id`, `doctor`, `spec_id`, `numb`)"
-                            "VALUES (?, ?, ?, ?)",
-                            (lpu_id, doctor_name, spec_id, number))
+        self.cursor.execute("INSERT INTO `doctors` (`lpu_id`, `doctor`, `spec_id`, `numb`, `birthdate`)"
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (lpu_id, doctor_name, spec_id, number, birthdate))
         return self.conn.commit()
 
     def is_logged_in(self, user_id: int) -> bool:

@@ -126,7 +126,13 @@ async def add_doctor_num(message: Message, state: FSMContext):
     raw_input = message.text.strip()
     phone = text_utils.validate_phone_number(raw_input)
 
+    # Сохраняем значение в БД
     await TempDataManager.set(state, key="tp_dr_phone", value=phone)
+
+    # Задаем новый state
+    await state.set_state(AddDoctor.waiting_for_bd)
+
+    # LOG
     logger.info(f"Сохранён номер телефона: {phone}"
                 f"\nТип данных: {type(phone)}")
 
@@ -135,6 +141,25 @@ async def add_doctor_num(message: Message, state: FSMContext):
     else:
         await message.answer(f"✅ Номер сохранён: {phone}")
 
+    await message.answer("Введите дату рождения врача! \nФормат: '17.01.2000'")
+
+
+# === Получаем ДР врача ===
+@router.message(AddDoctor.waiting_for_bd)
+async def add_doctor_db(message: Message, state: FSMContext):
+    birthdate = message.text
+
+    # Добавляем значение в БД
+    await TempDataManager.set(state, key="tp_dr_bd", value=birthdate)
+
+    # LOG
+    logger.info(f"Сохранил дату рождения! {birthdate}")
+
+    if birthdate is None:
+        await message.answer("Дата не распознана или отсутствует. Продолжаем без него.")
+    else:
+        await message.answer(f"Дата сохранена: {birthdate}")
+
     # Вытаскиваем данные
     lpu_id, doctor_name, spec_id, number = await TempDataManager.get_many(state, "lpu_id",
                                                                           "tp_dr_name",
@@ -142,7 +167,7 @@ async def add_doctor_num(message: Message, state: FSMContext):
                                                                           "tp_dr_phone")
 
     # Добавляем врача в БД
-    pharmacyDB.add_doc(lpu_id, doctor_name, spec_id, number)
+    pharmacyDB.add_doc(lpu_id, doctor_name, spec_id, number, birthdate)
 
     # Дальнейшие действия
     await message.answer("✅ Врач успешно добавлен в систему!")
