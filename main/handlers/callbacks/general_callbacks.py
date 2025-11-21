@@ -72,12 +72,21 @@ async def confirm_no(callback: types.CallbackQuery, state: FSMContext):
 async def user_road(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "📍 Вы открыли раздел 'Маршрут'\nВыберите район.",
-        reply_markup=inline_buttons.get_district_inline()
+        reply_markup=inline_buttons.get_district_inline(mode="district")
     )
     await state.set_state(PrescriptionFSM.choose_lpu)
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
+
+
+@router.callback_query(F.data == "user_apothecary")
+async def user_apothecary(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "📍 Вы открыли раздел 'Аптека'\nВыберите район.",
+        reply_markup=inline_buttons.get_district_inline(mode="apothecary")
+    )
+    await state.set_state(PrescriptionFSM)
 
 
 @router.callback_query(F.data == "user_lpu", PrescriptionFSM.choose_lpu)
@@ -225,6 +234,8 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
 async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     # Извлекаем название и ID ЛПУ
     lpu_name = await TempDataManager.get_button_name(state, callback.data)
+    lpu_url = await TempDataManager.get(state, key="lpu_url")
+
     lpu_id = callback.data.replace("lpu_", "")
 
     # Сохраняем выбор в FSMContext
@@ -236,14 +247,15 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"urls - {await TempDataManager.get(state, key="lpu_url")}")
+    logger.info(f"urls - {lpu_url}")
     logger.info(f"lpu_selected - {lpu_name}, {lpu_id}")
 
     # Создаем клавиатуру
     keyboard = await inline_buttons.get_doctors_inline(state, lpu_id)
 
     # Отвечаем пользователю
-    await callback.message.answer(text=f"✅ Вы выбрали ЛПУ - {lpu_name}")
+    await callback.message.answer(text=f"✅ Вы выбрали ЛПУ - {lpu_name}"
+                                       f"\nСсылка в 2GIS - {lpu_url}")
     await callback.message.edit_text(text="🥼 Выберите врача",
                                      reply_markup=keyboard)
 
@@ -260,10 +272,18 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, key="doc_name", value=doc_name)
     await TempDataManager.set(state, key="doc_id", value=doc_id)
 
+    # Берем данные из БД
+    doc_spec, doc_num = pharmacyDB.get_doc_stats(doc_id)[0]
+
+    # Сохраняем данные в БД
+    await TempDataManager.set(state, key="doc_spec", value=doc_spec)
+    await TempDataManager.set(state, key="doc_num", value=doc_num)
+
     # Задаю новый FSM
     await state.set_state(PrescriptionFSM.choose_meds)
 
     # LOG
+    logger.debug(f"Items in DOC_SELECTED == {doc_spec, doc_num}")
     logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Пользователь {callback.from_user.first_name} - Выбрал врача - {doc_name, doc_id}")
 

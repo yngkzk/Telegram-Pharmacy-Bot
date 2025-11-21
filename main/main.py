@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from loader import accountantDB, dp, bot
 
 from handlers.menu import register, main_menu
-from handlers.add import add, select_handlers, tota_and_comms
+from handlers.add import add, select_handlers, term_and_comms
 from handlers.report import report
 from handlers.callbacks import general_callbacks
 
@@ -19,7 +19,7 @@ async def main(): # Запускаем бота асинхронно
     dp.include_router(add.router)
     dp.include_router(general_callbacks.router)
     dp.include_router(select_handlers.router)
-    dp.include_router(tota_and_comms.router)
+    dp.include_router(term_and_comms.router)
     dp.include_router(report.router)
     setup_error_handler(dp)
 

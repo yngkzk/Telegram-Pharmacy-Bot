@@ -139,6 +139,7 @@ def get_users_inline() -> InlineKeyboardMarkup:
     items = [
          ("🗺 Маршрут", "user_road"),
          ("🏥 ЛПУ", "user_lpu"),
+         ("📌 Аптека", "user_apothecary"),
          ("🚪 Выйти из уч. записи", "user_log_out")
     ]
     return build_inline_keyboard(items, row_width=2, add_back=True)
@@ -174,9 +175,9 @@ def get_admin_inline() -> InlineKeyboardMarkup:
 
 
 # === inline список Районов ===
-def get_district_inline() -> InlineKeyboardMarkup:
+def get_district_inline(mode: str) -> InlineKeyboardMarkup:
     districts = pharmacyDB.get_district_list()
-    items = [(name, f"district_{name}") for name in districts]
+    items = [(name, f"{mode}_{name}") for name in districts]
     return build_inline_keyboard(items, row_width=2, add_back=True)
 
 

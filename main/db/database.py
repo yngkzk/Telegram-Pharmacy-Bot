@@ -136,10 +136,29 @@ class BotDB:
 
         return result
 
+    def get_doc_stats(self, doc_id):
+        """
+        Возвращает характеристики конкретного врача
+        :param doc_id: ID врача
+        :return:
+        """
+        query = """
+            SELECT s.spec, d.numb 
+            FROM doctors AS d
+            JOIN specs AS s ON d.spec_id = s.spec_id
+            WHERE id = ?
+            ORDER BY d.id
+        """
+
+        result = self.cursor.execute(query, (doc_id,)).fetchall()
+
+        return result
+
+
+
     def get_spec_list(self):
         """
         Возвращает список специальностей.
-        :param lpu: Название ЛПУ
         """
 
         query = """

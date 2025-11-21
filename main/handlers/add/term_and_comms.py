@@ -19,7 +19,7 @@ async def get_and_set_ct(message: types.Message, state: FSMContext):
     text = message.text
 
     # Сохраняю значение во временной памяти
-    await TempDataManager.set(state, key="tota", value=text)
+    await TempDataManager.set(state, key="term", value=text)
 
     # Задаю новый FSM
     await state.set_state(PrescriptionFSM.comments)
