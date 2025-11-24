@@ -270,14 +270,14 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, key="road", value=a_road_num)
 
     # Вытаскиваем район
-    a_district = await TempDataManager.get(state, key="district")
+    a_district = await TempDataManager.get(state, key="a_district")
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Район - {a_district}, Номер маршрута - {a_road_num}")
 
     # Создаем клавиатуру
-    keyboard = await inline_buttons.get_lpu_inline(state, a_district, a_road_num)
+    keyboard = await inline_buttons.get_apothecary_inline(state, a_district, a_road_num)
 
     # Отвечаем пользователю
     await callback.message.answer(text=f"✅ Вы выбрали маршрут № - {a_road_num}")
