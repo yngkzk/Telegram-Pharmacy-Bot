@@ -147,7 +147,8 @@ async def add_doctor_num(message: Message, state: FSMContext):
 # === Получаем ДР врача ===
 @router.message(AddDoctor.waiting_for_bd)
 async def add_doctor_db(message: Message, state: FSMContext):
-    birthdate = message.text
+    raw_input = message.text
+    birthdate = text_utils.validate_date(raw_input)
 
     # Добавляем значение в БД
     await TempDataManager.set(state, key="tp_dr_bd", value=birthdate)

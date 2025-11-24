@@ -1,5 +1,6 @@
 import re
 from utils.logger.logger_config import logger
+from datetime import datetime
 
 
 def shorten_name(full_name: str) -> str:
@@ -74,3 +75,33 @@ def validate_phone_number(text: str) -> str | None:
     # Если не похоже на номер — возвращаем None
     logger.warning(f"⚠️ Невалидный номер телефона: {text}")
     return None
+
+def validate_date(date_str: str) -> bool:
+    """
+    Проверяет корректность даты в формате DD.MM.YYYY.
+    """
+
+    # 1. Проверяем формат по регулярке
+    if not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", date_str):
+        return False
+
+    day, month, year = map(int, date_str.split("."))
+
+    # 2. Проверяем диапазоны вручную
+    if not (1 <= day <= 31):
+        return False
+
+    if not (1 <= month <= 12):
+        return False
+
+    current_year = datetime.now().year
+    if not (1900 <= year <= current_year):
+        return False
+
+    # 3. Проверяем реальное существование даты
+    try:
+        datetime(year, month, day)
+    except ValueError:
+        return False
+
+    return True

@@ -4,6 +4,7 @@ from aiogram.types import ReplyKeyboardRemove
 
 from keyboard.inline import inline_buttons, inline_select
 from keyboard.reply import reply_buttons
+from pandas import value_counts
 
 from states.menu.main_menu_state import MainMenu
 from states.add.add_state import AddDoctor, AddPharmacy
@@ -70,9 +71,12 @@ async def confirm_no(callback: types.CallbackQuery, state: FSMContext):
 # === Меню пользователя ===
 @router.callback_query(F.data == "user_road")
 async def user_road(callback: types.CallbackQuery, state: FSMContext):
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_district_inline(state, mode="district")
+
     await callback.message.edit_text(
         "📍 Вы открыли раздел 'Маршрут'\nВыберите район.",
-        reply_markup=inline_buttons.get_district_inline(mode="district")
+        reply_markup=keyboard
     )
     await state.set_state(PrescriptionFSM.choose_lpu)
 
@@ -82,31 +86,36 @@ async def user_road(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "user_apothecary")
 async def user_apothecary(callback: types.CallbackQuery, state: FSMContext):
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_district_inline(state, mode="a_district")
+
     await callback.message.edit_text(
         "📍 Вы открыли раздел 'Аптека'\nВыберите район.",
-        reply_markup=inline_buttons.get_district_inline(mode="apothecary")
+        reply_markup=keyboard
     )
-    await state.set_state(PrescriptionFSM)
+    await state.set_state(PrescriptionFSM.choose_apothecary)
 
 
-@router.callback_query(F.data == "user_lpu", PrescriptionFSM.choose_lpu)
+@router.callback_query(F.data == "user_lpu")
 async def user_lpu(callback: types.CallbackQuery, state: FSMContext):
 
-    data = await state.get_data()
-    district = data.get("selected_district")
-    road = data.get("selected_road")
+    # Беру данные из временной БД
+    district = await TempDataManager.get(state, key="district")
+    road = await TempDataManager.get(state, key="road")
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
 
     if district and road:
+        await state.set_state(PrescriptionFSM.choose_lpu)
         keyboard = await inline_buttons.get_lpu_inline(state, district, road)
         await callback.message.edit_text("📍 Выберите ЛПУ",
                                          reply_markup=keyboard)
-        await state.set_state(PrescriptionFSM.choose_doctor)
     else:
+        keyboard = await inline_buttons.get_district_inline(state=state,
+                                                            mode="district")
         await callback.message.edit_text("🏥 Сначала выберите маршрут!",
-                                         reply_markup=inline_buttons.get_district_inline())
+                                         reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "user_log_out")
@@ -191,6 +200,7 @@ async def show_main_menu(callback_or_message, state: FSMContext, logged_in: bool
 async def district_selected(callback: types.CallbackQuery, state: FSMContext):
     # Извлекаем название района
     district = callback.data.replace("district_", "")
+    district_name = await TempDataManager.get_button_name(state, callback.data)
 
     # Сохраняем выбор в FSMContext
     await TempDataManager.set(state, key="district", value=district)
@@ -198,10 +208,33 @@ async def district_selected(callback: types.CallbackQuery, state: FSMContext):
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
 
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_road_inline(state=state, mode="road")
+
     # Отвечаем пользователю
-    await callback.message.answer(text=f"✅ Вы выбрали район: {district}")
+    await callback.message.answer(text=f"✅ Вы выбрали район: {district_name}")
     await callback.message.edit_text(text="🗺 Выберите маршрут",
-                                     reply_markup=inline_buttons.get_road_inline())
+                                     reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith("a_district_"))
+async def a_district_selected(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем название района
+    a_district = callback.data.replace("a_district_", "")
+    a_district_name = await TempDataManager.get_button_name(state, callback.data)
+
+    # Сохраняем выбор в FSMContext
+    await TempDataManager.set(state, key="a_district", value=a_district)
+
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_road_inline(state=state, mode="a_road")
+
+    # Отвечаем пользователю
+    await callback.message.answer(text=f"✅ Вы выбрали район: {a_district_name}")
+    await callback.message.edit_text(text="🗺 Выберите маршрут",
+                                     reply_markup=keyboard)
 
 
 # === Выбор маршрута ====
@@ -218,7 +251,7 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"Район - district, Номер маршрута - road_num")
+    logger.info(f"Район - {district}, Номер маршрута - {road_num}")
 
     # Создаем клавиатуру
     keyboard = await inline_buttons.get_lpu_inline(state, district, road_num)
@@ -228,13 +261,36 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text="📍 Выберите ЛПУ",
                                      reply_markup=keyboard)
 
+@router.callback_query(F.data.startswith("a_road_"))
+async def road_selected(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем название маршрута
+    a_road_num = callback.data.replace("a_road_", "")
+
+    # Сохраняем выбор в FSMContext
+    await TempDataManager.set(state, key="road", value=a_road_num)
+
+    # Вытаскиваем район
+    a_district = await TempDataManager.get(state, key="district")
+
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+    logger.info(f"Район - {a_district}, Номер маршрута - {a_road_num}")
+
+    # Создаем клавиатуру
+    keyboard = await inline_buttons.get_lpu_inline(state, a_district, a_road_num)
+
+    # Отвечаем пользователю
+    await callback.message.answer(text=f"✅ Вы выбрали маршрут № - {a_road_num}")
+    await callback.message.edit_text(text="📍 Выберите Аптеку",
+                                     reply_markup=keyboard)
+
 
 # === Выбор ЛПУ ===
 @router.callback_query(F.data.startswith("lpu_"), PrescriptionFSM.choose_lpu)
 async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
     # Извлекаем название и ID ЛПУ
     lpu_name = await TempDataManager.get_button_name(state, callback.data)
-    lpu_url = await TempDataManager.get(state, key="lpu_url")
+    lpu_url = await TempDataManager.get_extra(state, callback.data)
 
     lpu_id = callback.data.replace("lpu_", "")
 
@@ -247,7 +303,7 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
 
     # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"urls - {lpu_url}")
+    logger.info(f"urls - {lpu_url["url"]}")
     logger.info(f"lpu_selected - {lpu_name}, {lpu_id}")
 
     # Создаем клавиатуру
@@ -255,7 +311,7 @@ async def lpu_selected(callback: types.CallbackQuery, state: FSMContext):
 
     # Отвечаем пользователю
     await callback.message.answer(text=f"✅ Вы выбрали ЛПУ - {lpu_name}"
-                                       f"\nСсылка в 2GIS - {lpu_url}")
+                                       f"\nСсылка в 2GIS - {lpu_url["url"]}")
     await callback.message.edit_text(text="🥼 Выберите врача",
                                      reply_markup=keyboard)
 

@@ -79,14 +79,10 @@ class BotDB:
 
     def get_district_list(self):
         """Возвращаем список районов"""
-        db_district_list = self.cursor.execute("SELECT DISTINCT `district_name` FROM `roads`")
+        db_district_list = self.cursor.execute("SELECT `id`, `name` FROM `districts`")
         result = db_district_list.fetchall()
         logger.info(f"Результат в db.py - {result}")
-        district_list = []
-        for i in range(len(result)):
-            converted = result[i]
-            district_list.append(str(converted)[2:-3])
-        return district_list
+        return result
 
     def get_road_list(self):
         """Возвращаем список маршрутов как список int"""
@@ -113,6 +109,25 @@ class BotDB:
             JOIN roads AS r ON r.road_id = l.road_id
             WHERE r.district_name = ? AND r.road_num = ?
             ORDER BY l.pharmacy_name
+        """
+        result = self.cursor.execute(query, (district, road)).fetchall()
+
+        return result
+
+    def get_apothecary_list(self, district, road):
+        """
+        Возвращает список Аптек в указанном районе и маршруте.
+        :param district:
+        :param road:
+        :return:
+        """
+
+        query = """
+            SELECT a.id, a.name, a.url
+            FROM apothecary AS a
+            JOIN roads AS r ON r.road_id = a.road_id
+            WHERE r.district_name = ? AND r.road_num = ?
+            ORDER BY a.id
         """
         result = self.cursor.execute(query, (district, road)).fetchall()
 

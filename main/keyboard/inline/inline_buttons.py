@@ -61,38 +61,58 @@ async def build_shortcut_keyboard(
     add_back: bool = None,
     add_button: bool = None
 ) -> InlineKeyboardMarkup:
-    """
-    Универсальная функция для создания InlineKeyboard.
-    Особенности:
-      - хранит текст кнопок в FSM (через TempDataManager);
-      - автоматически сокращает длинные имена для врачей (prefix == "doctor");
-      - поддерживает url (если есть 3-й элемент в items);
-    """
+
     rows = []
     row = []
 
     for i, item in enumerate(items, start=1):
-        item_id = item[id_field]
-        full_text = str(item[text_field])
+
+        # ===========================
+        # 🔥 Определяем тип элемента
+        # ===========================
+        # 1) item = 5  → id=5, text="5"
+        # 2) item = "Алматы" → id="Алматы", text="Алматы"
+        # 3) item = (1,"Doc") → id=item[id_field], text=item[text_field]
+        # 4) item = {"id":1,"name":"Doc"} → поддержим тоже
+
+        if isinstance(item, (int, str)):
+            item_id = str(item)
+            full_text = str(item)
+            url = None
+
+        elif isinstance(item, dict):
+            item_id = str(item.get("id") or item.get("pk") or item.get("value") or i)
+            full_text = str(item.get("name") or item.get("text") or item.get("title") or item_id)
+            url = item.get("url")
+
+        else:
+            # tuple / list
+            item_id = str(item[id_field])
+            full_text = str(item[text_field])
+            url = item[2] if len(item) > 2 else None
+
         callback_data = f"{prefix}_{item_id}"
 
+        # ===========================
+        # 🔗 Если есть URL — сохраняем
+        # ===========================
+        if url and state:
+            await TempDataManager.save_extra(state, callback_data, url=url)
 
-        # Проверяем наличие URL
-        url = item[2] if len(item) > 2 else None
-        if url is not None and state is not None:
-            await TempDataManager.set(state, key="lpu_url", value=url)
+        # ===========================
+        # 🧠 Сокращение ФИО для врачей
+        # ===========================
+        text = shorten_name(full_text) if prefix == "doc" else full_text
 
-        # 🔹 Если это список врачей — сокращаем длинные ФИО
-        if prefix == "doc":
-            text = shorten_name(full_text)
-        else:
-            text = full_text
-
-        # 🔹 Сохраняем оригинальный текст
-        if state is not None:
+        # ===========================
+        # 🧠 Запоминаем оригинальный текст
+        # ===========================
+        if state:
             await TempDataManager.save_button(state, callback_data, full_text)
 
-        # Создаем кнопку
+        # ===========================
+        # 🔘 Создаём кнопку
+        # ===========================
         row.append(InlineKeyboardButton(text=text, callback_data=callback_data))
 
         if i % row_width == 0:
@@ -102,11 +122,11 @@ async def build_shortcut_keyboard(
     if row:
         rows.append(row)
 
-    # 🔹 Добавляем кнопку "Добавить", если разрешено
+    # ➕ Добавить
     if add_button:
         rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"add_{prefix}")])
 
-    # 🔹 Добавляем кнопку "Назад", если разрешено
+    # 🔙 Назад
     if add_back:
         rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back")])
 
@@ -175,30 +195,22 @@ def get_admin_inline() -> InlineKeyboardMarkup:
 
 
 # === inline список Районов ===
-def get_district_inline(mode: str) -> InlineKeyboardMarkup:
-    districts = pharmacyDB.get_district_list()
-    items = [(name, f"{mode}_{name}") for name in districts]
-    return build_inline_keyboard(items, row_width=2, add_back=True)
+async def get_district_inline(state, mode: str) -> InlineKeyboardMarkup:
+    items = pharmacyDB.get_district_list()
+    logger.info(f"items in get_district - {items}")
+    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix=mode, row_width=2,
+                                   add_back=True, add_button=False)
+    return keyboard
 
 
 # === inline список Маршрутов ===
-def get_road_inline() -> InlineKeyboardMarkup:
+async def get_road_inline(state, mode: str) -> InlineKeyboardMarkup:
     """Создаёт inline-клавиатуру со списком маршрутов"""
-    road_list = pharmacyDB.get_road_list() # например, [1, 2, 3, 4, 5, 6, 7]
-    buttons = []
-    for road_num in road_list:
-        buttons.append(
-            InlineKeyboardButton(
-                text=f"Маршрут № - {road_num}", # надпись на кнопке
-                callback_data=f"road_{road_num}" # callback
-        )
-    )
-
-    # Разбиваем кнопки по рядам (например, по 2 в ряд)
-    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)] # Добавляем кнопку "Назад"
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back")])
-
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    items = pharmacyDB.get_road_list() # например, [1, 2, 3, 4, 5, 6, 7]
+    logger.info(f"items in road_list - {items}")
+    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix=mode, row_width=2,
+                                             add_back=True, add_button=False)
+    return keyboard
 
 
 # === inline список ЛПУ ===
@@ -207,6 +219,15 @@ async def get_lpu_inline(state, district, road) -> InlineKeyboardMarkup:
     items = pharmacyDB.get_lpu_list(district, road)
     logger.info(f"items in get_lpu - {items}")
     keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="lpu", row_width=2,
+                                             add_back=True, add_button=True)
+    return keyboard
+
+# === inline список Аптек ===
+async def get_apothecary_inline(state, district, road) -> InlineKeyboardMarkup:
+    """Создаёт inline-клавиатуру со списком аптек"""
+    items = pharmacyDB.get_apothecary_list(district, road)
+    logger.info(f"items in get_apothecary - {items}")
+    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="apothecary", row_width=3,
                                              add_back=True, add_button=True)
     return keyboard
 

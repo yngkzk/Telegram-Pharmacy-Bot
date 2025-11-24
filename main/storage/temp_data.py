@@ -82,3 +82,16 @@ class TempDataManager:
         data = await state.get_data()
         data["button_memory"] = {}
         await state.update_data(data)
+
+    @staticmethod
+    async def save_extra(state: FSMContext, callback: str, **kwargs) -> None:
+        data = await state.get_data()
+        extra = data.get("extra", {})
+        extra[callback] = kwargs
+        await state.update_data(extra=extra)
+
+    @staticmethod
+    async def get_extra(state: FSMContext, callback: str) -> None:
+        data = await state.get_data()
+        extra = data.get("extra", {})
+        return extra.get(callback)

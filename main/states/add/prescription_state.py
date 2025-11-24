@@ -8,3 +8,5 @@ class PrescriptionFSM(StatesGroup):
     contract_terms = State()
     comments = State()
     confirm = State()
+
+    choose_apothecary = State()
