@@ -134,7 +134,7 @@ async def build_shortcut_keyboard(
 
 
 # === подтверждение действий ===
-def get_confirm_inline(mode) -> InlineKeyboardMarkup:
+def get_confirm_inline(mode=False) -> InlineKeyboardMarkup:
     if mode:
         items = [
             ("📖 Посмотреть", "show_card"),

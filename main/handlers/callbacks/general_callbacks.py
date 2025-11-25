@@ -22,6 +22,7 @@ router = Router()
 @router.callback_query(F.data == "confirm_yes")
 async def confirm_yes(callback: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
+    logger.debug(f"FSM state in 'current_state' = {current_state}")
 
     # Проверяем, в каком состоянии находимся
     if current_state == AddDoctor.waiting_for_spec:
@@ -31,11 +32,22 @@ async def confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         logger.info(f"general_callbacks.py - {keyboard}")
         await callback.message.edit_text(f"👨‍⚕️ Врач {fio}, выберите специальность",
                                          reply_markup=keyboard)
-        logger.info("Дошел до current_state == WFS - 👨‍⚕️ Врач {fio}")
+        logger.info(f"Дошел до current_state == WFS - 👨‍⚕️ Врач {fio}")
 
-    elif current_state == AddDoctor.waiting_for_doc:
+    elif current_state == PrescriptionFSM.choose_request:
+        # Задаю новый state
+        await state.set_state(PrescriptionFSM.choose_meds)
+
+        # LOG
+        logger.info(f"Дошел до кода PrescriptionFSM")
+
+        # Отвечаем пользователю
+        await callback.message.answer(f"👨‍⚕️ Выберите препараты",
+                                      reply_markup=inline_select.get_prep_inline())
+
+    elif current_state == AddDoctor.waiting_for_bd:
         fio = TempDataManager.get(state, key="tp_dr_name")
-        logger.info("Подтверждение - {fio}")
+        logger.info(f"Подтверждение - {fio}")
         # Пользователь должен еще добавить специальность врача и его номер (при наличии)
         await callback.message.edit_text(f"👨‍⚕️ Врач {fio} успешно добавлен ✅")
 
@@ -93,8 +105,6 @@ async def user_apothecary(callback: types.CallbackQuery, state: FSMContext):
         "📍 Вы открыли раздел 'Аптека'\nВыберите район.",
         reply_markup=keyboard
     )
-    await state.set_state(PrescriptionFSM.choose_apothecary)
-
 
 @router.callback_query(F.data == "user_lpu")
 async def user_lpu(callback: types.CallbackQuery, state: FSMContext):
@@ -276,6 +286,9 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
     logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Район - {a_district}, Номер маршрута - {a_road_num}")
 
+    # Задаем новое состояние
+    await state.set_state(PrescriptionFSM.choose_apothecary)
+
     # Создаем клавиатуру
     keyboard = await inline_buttons.get_apothecary_inline(state, a_district, a_road_num)
 
@@ -283,6 +296,27 @@ async def road_selected(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(text=f"✅ Вы выбрали маршрут № - {a_road_num}")
     await callback.message.edit_text(text="📍 Выберите Аптеку",
                                      reply_markup=keyboard)
+
+
+# === Выбор Аптеки ===
+@router.callback_query(F.data.startswith("apothecary"), PrescriptionFSM.choose_apothecary)
+async def apothecary_selected(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем название аптеки
+    apothecary = await TempDataManager.get_button_name(state, callback.data)
+
+    # Сохраняем выбор в FSMContext
+    await TempDataManager.set(state, key="apothecary", value=apothecary)
+
+    # LOG
+    logger.debug(f"Current FSM - {await state.get_state()}")
+    logger.info(f"Аптека - {apothecary}")
+
+    # Задаем новое состояние
+    await state.set_state(PrescriptionFSM.choose_request)
+
+    # Отвечаем пользователю
+    await callback.message.answer(text=f"📍 Вы выбрали Аптеку - {apothecary}")
+    await callback.message.edit_text(text="📩 Есть ли заявка?", reply_markup=inline_buttons.get_confirm_inline())
 
 
 # === Выбор ЛПУ ===

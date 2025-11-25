@@ -10,3 +10,6 @@ class PrescriptionFSM(StatesGroup):
     confirm = State()
 
     choose_apothecary = State()
+    choose_request = State()
+    choose_remaining = State()
+    comments_a = State()
