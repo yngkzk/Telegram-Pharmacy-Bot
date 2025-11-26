@@ -1,11 +1,8 @@
-from aiogram import Router, types, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardRemove
 from storage.temp_data import TempDataManager
 from keyboard.inline import inline_buttons
 
-from loader import pharmacyDB
 from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
 
@@ -13,42 +10,38 @@ from states.add.prescription_state import PrescriptionFSM
 router = Router()
 
 
+# === 1️⃣ Получение условий договора ===
 @router.message(PrescriptionFSM.contract_terms)
 async def get_and_set_ct(message: types.Message, state: FSMContext):
-    """Достаем или ставим новый договор с врачей из БД"""
-    text = message.text
+    """Сохраняет условие договора (term)"""
+    text = message.text.strip()
 
-    # Сохраняю значение во временной памяти
     await TempDataManager.set(state, key="term", value=text)
 
-    # Задаю новый FSM
     await state.set_state(PrescriptionFSM.comments)
 
-    # LOG
-    logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"Пользователь {message.from_user.first_name} договорился на {text}!")
+    logger.debug(f"FSM -> {await state.get_state()}")
+    logger.info(f"Пользователь {message.from_user.first_name} указал условие: {text}")
 
-    # Отвечаем пользователю
-    await message.answer(f"✅ Ваш договор - {text}")
-    await message.answer(f"✍️ Напишите ваш комментарии:")
+    await message.answer(f"✅ Условие договора сохранено:\n{text}")
+    await message.answer("✍️ Напишите ваш комментарий:")
 
 
+# === 2️⃣ Получение комментария ===
 @router.message(PrescriptionFSM.comments)
 async def set_commentary(message: types.Message, state: FSMContext):
-    """Добавляем комментарии"""
-    text = message.text
+    """Сохраняет комментарий перед подтверждением"""
+    text = message.text.strip()
 
-    # Сохраняю значение во временной памяти
     await TempDataManager.set(state, key="comms", value=text)
 
-    # Задаю новый FSM для подтверждения выбора
     await state.set_state(PrescriptionFSM.confirm)
 
-    # LOG
-    logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"Пользователь {message.from_user.first_name} комментировал {text}!")
+    logger.debug(f"FSM -> {await state.get_state()}")
+    logger.info(f"Пользователь {message.from_user.first_name} оставил комментарий: {text}")
 
-    # Отвечаем пользователю
-    await message.answer(f"✅ Ваш комментарии - {text}")
-    await message.answer(f"📌 Хотите посмотреть или загрузить отчет?",
-                         reply_markup=inline_buttons.get_confirm_inline(mode=1))
+    await message.answer(f"💬 Комментарий сохранён:\n{text}")
+    await message.answer(
+        "📌 Хотите посмотреть или загрузить отчет?",
+        reply_markup=inline_buttons.get_confirm_inline(mode=True)
+    )

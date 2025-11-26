@@ -33,14 +33,16 @@ async def start(message: types.Message, state: FSMContext):
 async def user_entry(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
 
-    if accountantDB.user_exists(user_id) and accountantDB.is_logged_in(user_id):
-        # Убираем старую reply клавиатуру
+    # --- ASYNC вызовы БД ---
+    exists = await accountantDB.user_exists(user_id)
+    logged_in = await accountantDB.is_logged_in(user_id)
+
+    if exists and logged_in:
         await message.answer(
             f"С возвращением, {message.from_user.first_name}! 👋",
             reply_markup=ReplyKeyboardRemove()
         )
 
-        # Показываем inline клавиатуру
         await message.answer(
             "Выберите действие:",
             reply_markup=inline_buttons.get_users_inline()
@@ -50,44 +52,42 @@ async def user_entry(message: types.Message, state: FSMContext):
 
     else:
         await message.answer(
-            "👋 Похоже, вы новый пользователь.\n"
-            "Хотите зарегистрироваться?",
+            "👋 Похоже, вы новый пользователь.\nХотите зарегистрироваться?",
             reply_markup=reply_buttons.get_yn_kb()
         )
         await state.set_state(Register.begin)
 
 
-# === Админ панель (inline меню) ===
+# === Админ панель ===
 @router.message(IsLoggedInFilter(), MainMenu.logged_in, F.text == "🏥 Адм. панель")
 async def admin_panel(message: types.Message, state: FSMContext):
-    # Убираем reply клавиатуру
     await message.answer("Админ панель ⚙️", reply_markup=ReplyKeyboardRemove())
-    # Показываем inline
     await message.answer("Выберите действие:", reply_markup=inline_buttons.get_admin_inline())
 
 
-# === Отзывы (inline меню) ===
+# === Отзывы ===
 @router.message(IsLoggedInFilter(), MainMenu.logged_in, F.text == "💊 Отзывы")
 async def feedback_menu(message: types.Message):
     await message.answer("Отзывы 💬", reply_markup=ReplyKeyboardRemove())
     await message.answer("Выберите действие:", reply_markup=inline_buttons.get_feedback_inline())
 
 
-# === Отчёты (inline меню) ===
+# === Отчёты ===
 @router.message(IsLoggedInFilter(), MainMenu.logged_in, F.text == "📊 Отчёт")
 async def reports_logged_in(message: types.Message):
     await message.answer("Отчёты 📊", reply_markup=ReplyKeyboardRemove())
     await message.answer("Выберите тип отчёта:", reply_markup=inline_buttons.get_reports_inline())
 
 
-# Если пользователь не вошёл
+# Если пользователь не авторизован
 restricted_buttons = ['🏥 Адм. панель', '💊 Отзывы', '📊 Отчёт']
+
 @router.message(MainMenu.main, F.text.in_(restricted_buttons))
 async def reports_no_auth(message: types.Message):
     await message.answer("⛔ Сначала войдите в систему через '🧑‍⚕️ Пользователь'.")
 
 
-# === Вернуться в главное меню ===
+# === Вернуться в меню ===
 @router.message(F.text == "🔙 Меню")
 async def back_to_main(message: types.Message, state: FSMContext):
     await state.set_state(MainMenu.main)
@@ -97,11 +97,14 @@ async def back_to_main(message: types.Message, state: FSMContext):
     )
 
 
-# === Выход из учётной записи ===
+# === Выход из аккаунта ===
 @router.message(MainMenu.logged_in, F.text == "🚪 Выйти из уч. записи")
 async def logout(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    accountantDB.logout_user(user_id)
+
+    # ASYNC logout
+    await accountantDB.logout_user(user_id)
+
     await state.set_state(MainMenu.main)
 
     await message.answer(

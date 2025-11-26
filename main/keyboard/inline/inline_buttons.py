@@ -28,16 +28,11 @@ class LpuCallback(CallbackData, prefix="lpu"):
 
 # === Универсальный генератор inline-клавиатур ===
 def build_inline_keyboard(
-    items: list[tuple[str, str]],  # (текст, callback_data)
+    items: list[tuple[str, str]],
     row_width: int = 2,
     add_back: bool = False
 ) -> InlineKeyboardMarkup:
-    """
-    Универсальный конструктор inline-клавиатуры.
-    - items: список кортежей (текст, callback_data)
-    - row_width: количество кнопок в строке
-    - add_back: добавить кнопку "Назад"
-    """
+
     keyboard = []
     for i in range(0, len(items), row_width):
         keyboard.append([
@@ -51,6 +46,9 @@ def build_inline_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
+# ================================================================
+# 🔥 УНИВЕРСАЛЬНЫЙ POST-PROCESSOR ДЛЯ ДИНАМИЧЕСКИХ СПИСКОВ
+# ================================================================
 async def build_shortcut_keyboard(
     items: list,
     prefix: str,
@@ -67,14 +65,7 @@ async def build_shortcut_keyboard(
 
     for i, item in enumerate(items, start=1):
 
-        # ===========================
-        # 🔥 Определяем тип элемента
-        # ===========================
-        # 1) item = 5  → id=5, text="5"
-        # 2) item = "Алматы" → id="Алматы", text="Алматы"
-        # 3) item = (1,"Doc") → id=item[id_field], text=item[text_field]
-        # 4) item = {"id":1,"name":"Doc"} → поддержим тоже
-
+        # ===== Определяем id, текст и URL =====
         if isinstance(item, (int, str)):
             item_id = str(item)
             full_text = str(item)
@@ -86,33 +77,23 @@ async def build_shortcut_keyboard(
             url = item.get("url")
 
         else:
-            # tuple / list
             item_id = str(item[id_field])
             full_text = str(item[text_field])
             url = item[2] if len(item) > 2 else None
 
         callback_data = f"{prefix}_{item_id}"
 
-        # ===========================
-        # 🔗 Если есть URL — сохраняем
-        # ===========================
+        # ==== Если есть URL — сохраняем в TempData ====
         if url and state:
             await TempDataManager.save_extra(state, callback_data, url=url)
 
-        # ===========================
-        # 🧠 Сокращение ФИО для врачей
-        # ===========================
+        # ==== Сокращение ФИО только для врачей ====
         text = shorten_name(full_text) if prefix == "doc" else full_text
 
-        # ===========================
-        # 🧠 Запоминаем оригинальный текст
-        # ===========================
+        # ==== Запоминаем оригинальный текст ====
         if state:
             await TempDataManager.save_button(state, callback_data, full_text)
 
-        # ===========================
-        # 🔘 Создаём кнопку
-        # ===========================
         row.append(InlineKeyboardButton(text=text, callback_data=callback_data))
 
         if i % row_width == 0:
@@ -122,39 +103,35 @@ async def build_shortcut_keyboard(
     if row:
         rows.append(row)
 
-    # ➕ Добавить
+    # Кнопка "Добавить"
     if add_button:
         rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"add_{prefix}")])
 
-    # 🔙 Назад
+    # Назад
     if add_back:
         rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# === подтверждение действий ===
+# ================================================================
+# === ОБЫЧНЫЕ INLINE МЕНЮ (без БД)
+# ================================================================
 def get_confirm_inline(mode=False) -> InlineKeyboardMarkup:
-    if mode:
-        items = [
-            ("📖 Посмотреть", "show_card"),
-            ("📝 Загрузить", "mp_up")
-        ]
-    else:
-        items = [
-            ("✅ Подтвердить", "confirm_yes"),
-            ("❌ Отменить", "confirm_no")
-        ]
+    items = [
+        ("📖 Посмотреть", "show_card"),
+        ("📝 Загрузить", "mp_up")
+    ] if mode else [
+        ("✅ Подтвердить", "confirm_yes"),
+        ("❌ Отменить", "confirm_no")
+    ]
     return build_inline_keyboard(items, row_width=2)
 
+
 def get_cancel_inline() -> InlineKeyboardMarkup:
-    items = [
-        ("🔙 Назад", "back")
-    ]
-    return build_inline_keyboard(items)
+    return build_inline_keyboard([("🔙 Назад", "back")])
 
 
-# === inline меню для пользователей ===
 def get_users_inline() -> InlineKeyboardMarkup:
     items = [
          ("🗺 Маршрут", "user_road"),
@@ -165,7 +142,6 @@ def get_users_inline() -> InlineKeyboardMarkup:
     return build_inline_keyboard(items, row_width=2, add_back=True)
 
 
-# === inline меню для отчётов ===
 def get_reports_inline() -> InlineKeyboardMarkup:
     items = [
         ("📊 Продажи", "report_sales"),
@@ -175,7 +151,6 @@ def get_reports_inline() -> InlineKeyboardMarkup:
     return build_inline_keyboard(items, row_width=2, add_back=True)
 
 
-# === inline меню для отзывов ===
 def get_feedback_inline() -> InlineKeyboardMarkup:
     items = [
         ("⭐ Оставить отзыв", "feedback_add"),
@@ -184,7 +159,6 @@ def get_feedback_inline() -> InlineKeyboardMarkup:
     return build_inline_keyboard(items, row_width=1, add_back=True)
 
 
-# === inline меню администратора ===
 def get_admin_inline() -> InlineKeyboardMarkup:
     items = [
         ("👥 Пользователи", "admin_users"),
@@ -194,70 +168,47 @@ def get_admin_inline() -> InlineKeyboardMarkup:
     return build_inline_keyboard(items, row_width=2, add_back=True)
 
 
-# === inline список Районов ===
+# ================================================================
+# === СПИСКИ ИЗ БАЗЫ ДАННЫХ — ВСЕ async!
+# ================================================================
 async def get_district_inline(state, mode: str) -> InlineKeyboardMarkup:
-    items = pharmacyDB.get_district_list()
+    items = await pharmacyDB.get_district_list()
     logger.info(f"items in get_district - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix=mode, row_width=2,
-                                   add_back=True, add_button=False)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix=mode, add_back=True)
 
 
-# === inline список Маршрутов ===
 async def get_road_inline(state, mode: str) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком маршрутов"""
-    items = pharmacyDB.get_road_list() # например, [1, 2, 3, 4, 5, 6, 7]
+    items = await pharmacyDB.get_road_list()
     logger.info(f"items in road_list - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix=mode, row_width=2,
-                                             add_back=True, add_button=False)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix=mode, add_back=True)
 
 
-# === inline список ЛПУ ===
 async def get_lpu_inline(state, district, road) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком ЛПУ"""
-    items = pharmacyDB.get_lpu_list(district, road)
+    items = await pharmacyDB.get_lpu_list(district, road)
     logger.info(f"items in get_lpu - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="lpu", row_width=2,
-                                             add_back=True, add_button=True)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix="lpu", add_back=True, add_button=True)
 
-# === inline список Аптек ===
+
 async def get_apothecary_inline(state, district, road) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком аптек"""
-    items = pharmacyDB.get_apothecary_list(district, road)
+    items = await pharmacyDB.get_apothecary_list(district, road)
     logger.info(f"items in get_apothecary - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="apothecary", row_width=3,
-                                             add_back=True, add_button=True)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix="apothecary", row_width=3,
+                                         add_back=True, add_button=True)
 
 
-# === Специальность Врача ===
 async def get_spec_inline(state) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком специальностей"""
-    items = pharmacyDB.get_spec_list()
+    items = await pharmacyDB.get_spec_list()
     logger.info(f"items in get_spec - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="main_spec", row_width=2,
-                                             add_back=True, add_button=False)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix="main_spec", add_back=True)
 
 
-# === inline список Врачей ===
 async def get_doctors_inline(state, lpu) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком врачей"""
-    items = pharmacyDB.get_doctors_list(lpu)
-    logger.info(f"LPU in get_doctors_inline - {lpu}")
+    items = await pharmacyDB.get_doctors_list(lpu)
     logger.info(f"items in get_doctors - {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="doc", row_width=2,
-                                             add_back=True, add_button=True)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix="doc", add_back=True, add_button=True)
 
 
-# === inline список Препаратов ===
 async def get_prep_inline(state) -> InlineKeyboardMarkup:
-    """Создаёт inline-клавиатуру со списком препаратов"""
-    items = pharmacyDB.get_prep_list()
+    items = await pharmacyDB.get_prep_list()
     logger.info(f"ДБ pharmacy.db - результат {items}")
-    keyboard = await build_shortcut_keyboard(items=items, state=state, prefix="prep", row_width=2,
-                                             add_back=True, add_button=False)
-    return keyboard
+    return await build_shortcut_keyboard(items, state=state, prefix="prep", add_back=True)
