@@ -2,33 +2,39 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from loader import pharmacyDB
 
 
-def build_multi_select_keyboard(options: list[tuple[int, str]], selected: list[int]) -> InlineKeyboardMarkup:
+def build_multi_select_keyboard(options, selected_ids):
     """
-    Создаёт inline-клавиатуру с множественным выбором.
-    options: [(id, name), ...]
-    selected: [id, id, ...]
+    Генерация inline-клавиатуры с множественным выбором.
+    options: список кортежей (id, name)
+    selected_ids: список выбранных id
     """
+
     keyboard = []
 
     for opt_id, name in options:
-        is_selected = opt_id in selected
-        prefix = "✅ " if is_selected else ""
-        keyboard.append([
-            InlineKeyboardButton(
-                text=f"{prefix}{name}",
-                callback_data=f"select_{opt_id}"  # короткий и безопасный callback
-            )
-        ])
+        is_selected = opt_id in selected_ids
+        text = f"{'✅' if is_selected else '⬜'} {name}"
+        callback_data = f"select_{opt_id}"
 
-    # Добавляем нижний ряд с кнопками управления
+        keyboard.append([InlineKeyboardButton(text=text, callback_data=callback_data)])
+
+    # нижние кнопки
     keyboard.append([
         InlineKeyboardButton(text="🔄 Сбросить", callback_data="reset_selection"),
-        InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_selection")
+        InlineKeyboardButton(text="✔ Подтвердить", callback_data="confirm_selection")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_prep_inline() -> InlineKeyboardMarkup:
-    items = pharmacyDB.get_prep_list()
-    return build_multi_select_keyboard(items, [])
+async def get_prep_inline(state):
+    """
+    Асинхронный генератор клавиатуры выбора препаратов.
+    ВАЖНО: теперь список препаратов получаем через await!
+    """
+    items = await pharmacyDB.get_prep_list()
+
+    selected = await state.get_data()
+    selected_list = selected.get("selected_items", [])
+
+    return build_multi_select_keyboard(items, selected_list)

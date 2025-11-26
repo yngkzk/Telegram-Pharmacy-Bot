@@ -7,7 +7,9 @@ class IsLoggedInFilter(BaseFilter):
     async def __call__(self, message: types.Message) -> bool:
         user_id = message.from_user.id
 
-        exists = await accountantDB.user_exists(user_id)
-        logged = await accountantDB.is_logged_in(user_id)
+        username = await accountantDB.get_active_username(user_id)
+        if not username:
+            return False   # никого не выбрал, не авторизован
 
-        return exists and logged
+        # теперь проверяем авторизацию по username
+        return True

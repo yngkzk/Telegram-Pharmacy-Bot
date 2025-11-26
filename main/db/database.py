@@ -56,6 +56,14 @@ class BotDB:
         )
         return row["user_id"] if row else None
 
+    async def get_active_username(self, user_id: int) -> str | None:
+        cursor = await self.conn.execute(
+            "SELECT user_name FROM users WHERE user_id = ? AND logged_in = 1",
+            (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
     async def get_user_list(self):
         rows = await self._fetchall("SELECT user_name FROM users")
         return [row["user_name"] for row in rows]
@@ -66,10 +74,10 @@ class BotDB:
             VALUES (?, ?, ?, ?, ?, 1)
         """, (user_id, user_name, datetime.now(), user_password, region))
 
-    async def is_logged_in(self, user_id: int) -> bool:
+    async def is_logged_in(self, user_id: int, user_name: str) -> bool:
         row = await self._fetchone(
-            "SELECT logged_in FROM users WHERE user_id = ?",
-            (user_id,)
+            "SELECT logged_in FROM users WHERE user_id = ? AND user_name = ?",
+            (user_id, user_name)
         )
         return row and row["logged_in"] == 1
 
@@ -82,10 +90,10 @@ class BotDB:
             return False
         return pw.check_password(password, row["user_password"])
 
-    async def set_logged_in(self, username: str, status: bool):
+    async def set_logged_in(self, user_id, username: str, status: bool):
         await self._execute(
-            "UPDATE users SET logged_in = ? WHERE user_name = ?",
-            (status, username)
+            "UPDATE users SET logged_in = ? WHERE user_id = ? AND user_name = ?",
+            (status, user_id, username)
         )
 
     async def logout_user(self, user_id):
@@ -111,6 +119,22 @@ class BotDB:
             JOIN roads r ON r.road_id = l.road_id
             WHERE r.district_name = ? AND r.road_num = ?
             ORDER BY l.pharmacy_name
+        """, (district, road))
+
+    # ============================================================
+    # APOTHECARY
+    # ============================================================
+
+    async def add_apothecary(self, road_id):
+        pass
+
+    async def get_apothecary_list(self, district: str, road: int):
+        return await self._fetchall( """
+            SELECT a.id, a.name, a.url
+            FROM apothecary AS a
+            JOIN roads AS r ON r.road_id = a.road_id
+            WHERE r.district_name = ? AND r.road_num = ?
+            ORDER BY a.id
         """, (district, road))
 
     # ============================================================

@@ -32,14 +32,16 @@ async def start(message: types.Message, state: FSMContext):
 @router.message(F.text == "🧑‍⚕️ Пользователь")
 async def user_entry(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    data = await state.get_data()
+    user_name = data.get("username")
 
     # --- ASYNC вызовы БД ---
     exists = await accountantDB.user_exists(user_id)
-    logged_in = await accountantDB.is_logged_in(user_id)
+    logged_in = await accountantDB.is_logged_in(user_id, user_name)
 
     if exists and logged_in:
         await message.answer(
-            f"С возвращением, {message.from_user.first_name}! 👋",
+            f"С возвращением, {user_name}! 👋",
             reply_markup=ReplyKeyboardRemove()
         )
 
@@ -87,15 +89,23 @@ async def reports_no_auth(message: types.Message):
     await message.answer("⛔ Сначала войдите в систему через '🧑‍⚕️ Пользователь'.")
 
 
-# === Вернуться в меню ===
-@router.message(F.text == "🔙 Меню")
-async def back_to_main(message: types.Message, state: FSMContext):
-    await state.set_state(MainMenu.main)
-    await message.answer(
-        "Главное меню:",
-        reply_markup=reply_buttons.get_main_kb()
-    )
-
+# # === Вернуться в меню ===
+# @router.message(F.text == "🔙 Меню")
+# async def back_to_main(message: types.Message, state: FSMContext):
+#     user_id = message.from_user.id
+#     user_name = message.from_user.username
+#     logged_in = await accountantDB.is_logged_in(user_id, user_name)
+#
+#     if logged_in:
+#         await state.set_state(MainMenu.logged_in)
+#     else:
+#         await state.set_state(MainMenu.main)
+#
+#     await message.answer(
+#         "Главное меню:",
+#         reply_markup=reply_buttons.get_main_kb()
+#     )
+#
 
 # === Выход из аккаунта ===
 @router.message(MainMenu.logged_in, F.text == "🚪 Выйти из уч. записи")

@@ -1,9 +1,4 @@
-from idlelib.editor import keynames
-
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, KeyboardButtonPollType
-from loader import accountantDB, pharmacyDB
-
-from utils.logger.logger_config import logger
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 # === Универсальный генератор клавиатуры ===
@@ -14,76 +9,61 @@ def build_keyboard(
     per_page: int = 4,
     add_back: bool = False
 ) -> ReplyKeyboardMarkup:
-    """
-    Универсальный конструктор клавиатур с пагинацией.
-    - Делит список кнопок на страницы
-    - Добавляет навигацию ("⬅️ Назад" / "➡️ Далее") в одну строку
-    - Может добавить кнопку возврата к предыдущему меню
-    """
+
     keyboard = []
 
-    # Определяем диапазон для текущей страницы
     start = page * per_page
     end = start + per_page
     page_items = items[start:end]
 
-    # Разбиваем на строки по row_width
     for i in range(0, len(page_items), row_width):
-        keyboard.append([KeyboardButton(text=name) for name in page_items[i:i + row_width]])
+        keyboard.append([
+            KeyboardButton(text=name)
+            for name in page_items[i:i + row_width]
+        ])
 
-    # --- Добавляем навигационные кнопки ---
+    # — навигация —
     nav_row = []
-    if page > 0:  # если не первая страница
+    if page > 0:
         nav_row.append(KeyboardButton(text="⬅️ Назад"))
-    if end < len(items):  # если есть ещё страницы
+    if end < len(items):
         nav_row.append(KeyboardButton(text="➡️ Далее"))
 
     if nav_row:
-        keyboard.append(nav_row)  # 👈 ОДНА строка для навигации
+        keyboard.append(nav_row)
 
-    # Добавляем кнопку "Назад" (в меню выше), если нужно
-    if add_back and not any(btn.text == "🔙 Меню" for row in keyboard for btn in row):
+    # — кнопка "Назад" —
+    if add_back:
         keyboard.append([KeyboardButton(text="🔙 Меню")])
 
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+
 # === Главное меню ===
 def get_main_kb() -> ReplyKeyboardMarkup:
-    buttons = [
-        "🧑‍⚕️ Пользователь",
-        "🏥 Адм. панель",
-        "💊 Отзывы",
-        "📊 Отчёт"
-    ]
-    return build_keyboard(buttons, row_width=2)
+    return build_keyboard(
+        ["🧑‍⚕️ Пользователь", "🏥 Адм. панель", "💊 Отзывы", "📊 Отчёт"],
+        row_width=2
+    )
 
-# === Меню Мед. предов ===
+
+# === Меню Мед. представителей ===
 def get_med_kb() -> ReplyKeyboardMarkup:
-    buttons = [
-        "🗺 Изменить маршрут",
-        "🏥 ЛПУ",
-        "🚪 Выйти из уч. записи"
-    ]
-    return build_keyboard(buttons, row_width=2, add_back=True)
+    return build_keyboard(
+        ["🗺 Изменить маршрут", "🏥 ЛПУ", "🚪 Выйти из уч. записи"],
+        row_width=2,
+        add_back=True
+    )
 
-# === Список пользователей из базы ===
-def get_users_kb() -> ReplyKeyboardMarkup:
-    user_list = accountantDB.get_user_list()
-    return build_keyboard(user_list, row_width=2, add_back=True)
 
-# === Клавиатура Да / Нет ===
+# === Меню Да / Нет ===
 def get_yn_kb() -> ReplyKeyboardMarkup:
     return build_keyboard(["Да ✅", "Нет ❌"], row_width=2)
+
 
 def get_cancel_kb() -> ReplyKeyboardMarkup:
     return build_keyboard(["Отменить 🚫"])
 
-# === Клавиатура с регионами ===
+
 def get_region_kb() -> ReplyKeyboardMarkup:
     return build_keyboard(["АЛА", "ЮКО"], row_width=2)
-
-# === Клавиатура по маршрутам ===
-def get_district_kb() -> ReplyKeyboardMarkup:
-    district_list = pharmacyDB.get_district_list()
-    logger.info("Результат в buttons.py", district_list)
-    return build_keyboard(district_list, per_page=4, add_back=True)

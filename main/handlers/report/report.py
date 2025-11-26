@@ -70,18 +70,18 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
     user_name = callback.from_user.full_name
 
     # LOG
-    logger.info(f"Пользователь - full_name = {user_name}")
-    logger.info(f"Term == {term}"
-                f"\nprep_map == {selected}"
-                f"\n\nSelected_text == {selected_names}"
-                f"\n Type == {type(selected_names)}")
+    logger.info(f"REPORT: Пользователь - full_name = {user_name}")
+    logger.info(f"REPORT: Term == {term}"
+                f"\nREPORT: prep_map == {selected}"
+                f"\n\nREPORT: Selected_text == {selected_names}"
+                f"\nREPORT: Type == {type(selected_names)}")
 
     # Загружаем весь отчет в БД reports
-    report_id = reportsDB.save_main_report(
+    report_id = await reportsDB.save_main_report(
         user=user_name, district=district, road=road, lpu=lpu,
         doctor_name=doctor_name, doctor_spec=doctor_spec, doctor_number=doctor_number,
         term=term, comment=commas)
-    reportsDB.save_preps(report_id, selected_names)
+    await reportsDB.save_preps(report_id, selected_names)
 
     # Отвечаем пользователю
     await callback.message.answer("✅ Отчет загружен!")
