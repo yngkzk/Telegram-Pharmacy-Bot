@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from loader import pharmacyDB
+from storage.temp_data import TempDataManager
 
 
 def build_multi_select_keyboard(options, selected_ids):
@@ -34,7 +35,6 @@ async def get_prep_inline(state):
     """
     items = await pharmacyDB.get_prep_list()
 
-    selected = await state.get_data()
-    selected_list = selected.get("selected_items", [])
+    selected = await TempDataManager.get(state, "selected_items", [])
 
-    return build_multi_select_keyboard(items, selected_list)
+    return build_multi_select_keyboard(items, selected)

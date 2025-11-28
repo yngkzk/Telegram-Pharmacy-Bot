@@ -412,7 +412,7 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, "selected_items", [])
 
     # inline_select.get_prep_inline — async
-    keyboard = await inline_select.get_prep_inline(pharmacyDB, state)
+    keyboard = await inline_select.get_prep_inline(state)
     await callback.message.edit_text(
         "🏥 Выберите препараты:",
         reply_markup=keyboard
