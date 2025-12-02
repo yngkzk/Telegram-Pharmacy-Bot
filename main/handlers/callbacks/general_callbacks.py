@@ -73,7 +73,7 @@ async def confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         logger.info("Перехожу в состояние choose_meds для пользователя %s", callback.from_user.id)
 
         # inline_select.get_prep_inline — async (в нашем рефакторинге)
-        keyboard = await inline_select.get_prep_inline(state=state)
+        keyboard = await inline_select.get_prep_inline(state=state, prefix="apt")
         await callback.message.answer("👨‍⚕️ Выберите препараты", reply_markup=keyboard)
 
     # === Подтверждение добавления врача — завершающий шаг ===
@@ -97,7 +97,7 @@ async def confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
 
     else:
-        await callback.message.edit_text("✅ Подтвержено, но действие не определено.")
+        await callback.message.edit_text("✅ Подтверждено, но действие не определено.")
         logger.debug("confirm_yes: действие не определено. state=%s", current_state)
 
     await callback.answer()
@@ -372,14 +372,14 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
     try:
         doc_stats = await pharmacyDB.get_doc_stats(doc_id)
     except Exception:
-        logger.exception("Ошибка получения статов врача %s", doc_id)
+        logger.exception("Ошибка получения статистики врача %s", doc_id)
         doc_stats = None
 
     # doc_stats может быть строкой/кортежем/Row — распарсим аккуратно
     doc_spec = None
     doc_num = None
     if doc_stats:
-        # Если возвращается кортеж/список или aiosqlite.Row
+        # Если возвращается кортеж/список или aiosqlite.row
         if isinstance(doc_stats, (list, tuple)):
             # берем первые значения
             if len(doc_stats) >= 1:
@@ -412,7 +412,7 @@ async def doc_selected(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, "selected_items", [])
 
     # inline_select.get_prep_inline — async
-    keyboard = await inline_select.get_prep_inline(state)
+    keyboard = await inline_select.get_prep_inline(state, prefix="doc")
     await callback.message.edit_text(
         "🏥 Выберите препараты:",
         reply_markup=keyboard

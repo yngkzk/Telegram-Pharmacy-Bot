@@ -27,11 +27,15 @@ async def load_items(state: FSMContext):
 # === Выбор препарата (multi-select) ===
 @router.callback_query(F.data.startswith("select_"), PrescriptionFSM.choose_meds)
 async def toggle_selection(callback: types.CallbackQuery, state: FSMContext):
-    option_id = int(callback.data.replace("select_", ""))
+    prefix, select, option_id = callback.data.split("_")
+
+    option_id = int(option_id)
 
     items = await load_items(state)
     selected = await TempDataManager.get(state, "selected_items", [])
 
+    # LOG
+    logger.info(f"TOGGLE_SELECTION: {prefix}_{select}_{option_id}")
     logger.debug(f"Current FSM - {await state.get_state()}")
 
     # — Препараты: создаём карту id → имя
@@ -46,7 +50,7 @@ async def toggle_selection(callback: types.CallbackQuery, state: FSMContext):
 
     await TempDataManager.set(state, "selected_items", selected)
 
-    new_keyboard = build_multi_select_keyboard(items, selected)
+    new_keyboard = build_multi_select_keyboard(items, selected, prefix)
 
     try:
         await callback.message.edit_reply_markup(reply_markup=new_keyboard)
@@ -85,6 +89,7 @@ async def confirm_selection(callback: types.CallbackQuery, state: FSMContext):
 
     selected_names = [prep_map.get(i, f"#{i}") for i in selected]
 
+    # LOG
     logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Пользователь {callback.from_user.first_name} выбрал препараты {selected_names}")
 
@@ -97,5 +102,10 @@ async def confirm_selection(callback: types.CallbackQuery, state: FSMContext):
 
     # очищаем временные данные
     await TempDataManager.remove(state, "selected_items", "prep_map", "prep_items")
+
+    # LOG
+    logger.info(f"CONFIRM_SELECTION: {await TempDataManager.get(state, "selected_items", [])},"
+                f"{await TempDataManager.get(state, "prep_map", {})}"
+                f"{await TempDataManager.get(state, "prep_items")}")
 
     await callback.answer("✅ Выбор сохранён")

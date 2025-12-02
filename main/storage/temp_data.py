@@ -37,15 +37,10 @@ class TempDataManager:
 
     @staticmethod
     async def remove(state: FSMContext, *keys: str) -> None:
-        """
-        Удаляет указанные ключи из временного состояния.
-        Пример:
-            await TempDataManager.remove(state, "lpu", "doctor_name")
-        """
         data = await state.get_data()
         for k in keys:
             data.pop(k, None)
-        await state.update_data(data)
+        await state.set_data(data)
 
     @staticmethod
     async def clear(state: FSMContext) -> None:
