@@ -2,14 +2,29 @@ from aiogram.fsm.state import StatesGroup, State
 
 
 class PrescriptionFSM(StatesGroup):
-    choose_lpu = State()
-    choose_doctor = State()
-    choose_meds = State()
-    contract_terms = State()
-    comments = State()
-    confirm = State()
+    # ==========================================
+    # 🏥 Общие / Начало (General)
+    # ==========================================
+    choose_lpu = State()  # Выбор ЛПУ из списка
+    choose_apothecary = State()  # Выбор аптеки (если это отдельный путь)
 
-    choose_apothecary = State()
-    choose_request = State()
-    choose_remaining = State()
-    comments_a = State()
+    choose_meds = State()  # Мульти-выбор препаратов (Checkboxes)
+
+    # ==========================================
+    # 👨‍⚕️ Ветка: Визит к Врачу (Doctor Flow)
+    # ==========================================
+    choose_doctor = State()  # Выбор врача
+    contract_terms = State()  # Ввод условий (Текст)
+    doctor_comments = State()  # Комментарий (Текст) — переименовал из 'comments'
+
+    # ==========================================
+    # 💊 Ветка: Визит в Аптеку (Pharmacy Flow)
+    # ==========================================
+    waiting_for_quantity = State()  # Ввод количества (Текст/Число) — было 'choose_request'
+    waiting_for_remaining = State()  # Ввод остатков (Текст/Число) — было 'choose_remaining'
+    pharmacy_comments = State()  # Комментарий (Текст) — было 'comments_a'
+
+    # ==========================================
+    # ✅ Финал (Finalization)
+    # ==========================================
+    confirmation = State()  # Экран проверки и кнопка "Сохранить"

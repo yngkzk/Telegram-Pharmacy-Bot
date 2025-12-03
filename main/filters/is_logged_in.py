@@ -1,15 +1,22 @@
+from typing import Union
 from aiogram.filters import BaseFilter
-from aiogram import types
+from aiogram.types import Message, CallbackQuery
 from loader import accountantDB
 
-
 class IsLoggedInFilter(BaseFilter):
-    async def __call__(self, message: types.Message) -> bool:
-        user_id = message.from_user.id
+    """
+    Фильтр проверяет, авторизован ли пользователь в системе.
+    Работает и для Сообщений, и для CallbackQuery (кнопок).
+    """
+    async def __call__(self, event: Union[Message, CallbackQuery]) -> bool:
+        # 1. Безопасное получение пользователя (работает и для msg, и для call)
+        user = event.from_user
+        if not user:
+            return False
 
-        username = await accountantDB.get_active_username(user_id)
-        if not username:
-            return False   # никого не выбрал, не авторизован
+        # 2. Проверяем статус в БД
+        # Метод get_active_username уже содержит проверку "WHERE logged_in = 1"
+        active_username = await accountantDB.get_active_username(user.id)
 
-        # теперь проверяем авторизацию по username
-        return True
+        # 3. Возвращаем True, если имя найдено (значит юзер залогинен)
+        return active_username is not None

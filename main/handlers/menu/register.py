@@ -1,154 +1,221 @@
-from aiogram import types, Router, F
+from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardRemove
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from states.menu.register_state import Register, LoginFSM
 from states.menu.main_menu_state import MainMenu
 
 from loader import accountantDB
-
 from utils.text.pw import hash_password
-from keyboard.reply import reply_buttons
-from keyboard.inline import inline_buttons
 
+# Импортируем готовые клавиатуры
+from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
 router = Router()
 
-# === Старт регистрации ===
-@router.message(F.text == "Да ✅")
-async def start_register(message: types.Message, state: FSMContext):
-    await message.answer("Введите регион:", reply_markup=reply_buttons.get_region_kb())
-    await state.set_state(Register.region)
 
+# ============================================================
+# 🚪 ВХОД В СИСТЕМУ (ВЫБОР: РЕГИСТРАЦИЯ ИЛИ ЛОГИН)
+# ============================================================
+@router.callback_query(F.data == "start_registration")
+async def show_auth_choice(callback: types.CallbackQuery, state: FSMContext):
+    """
+    Показывает выбор: Новый пользователь или Уже есть аккаунт.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆕 Я новый пользователь", callback_data="auth_new")
+    builder.button(text="👤 У меня есть аккаунт", callback_data="auth_existing")
+    builder.button(text="❌ Отмена", callback_data="auth_cancel")
+    builder.adjust(1)
 
-# === Нажали "Да" не в том месте ===
-@router.message(F.text == "Да ✅")
-async def already_started(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    texts = {
-        'Register:login': 'логин',
-        'Register:region': 'регион',
-        'Register:password': 'пароль',
-        'Register:confirm': 'пароль заново'
-    }
-    text = texts.get(current_state, 'сначала отправь /start')
-
-    await message.answer(
-        f"Вы уже начали регистрацию, введите {text}.",
-        reply_markup=ReplyKeyboardRemove()
+    await callback.message.edit_text(
+        "🔐 <b>Авторизация</b>\n\nВы впервые в системе или уже зарегистрированы?",
+        reply_markup=builder.as_markup()
     )
+    await callback.answer()
 
 
-# === Отказ ===
-@router.message(F.text == "Нет ❌")
-async def reject_registration(message: types.Message, state: FSMContext):
-    users = await accountantDB.get_user_list()
-    await message.answer(
-        "Выберите пользователя:",
-        reply_markup=reply_buttons.build_keyboard(users, add_back=True)
+@router.callback_query(F.data == "auth_cancel")
+async def cancel_auth(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await state.set_state(MainMenu.main)
+    await callback.message.edit_text(
+        "🏠 Возврат в меню гостя.",
+        reply_markup=get_guest_menu_inline()
     )
+    await callback.answer()
+
+
+# ============================================================
+# 👤 ЛОГИН (СУЩЕСТВУЮЩИЙ ПОЛЬЗОВАТЕЛЬ)
+# ============================================================
+
+@router.callback_query(F.data == "auth_existing")
+async def start_login_flow(callback: types.CallbackQuery, state: FSMContext):
+    """
+    1. Получает список юзеров из БД.
+    2. Показывает их в виде кнопок.
+    """
+    users = await accountantDB.get_user_list()  # Возвращает список строк ['Ivan', 'Admin']
+
+    if not users:
+        await callback.message.edit_text(
+            "⚠️ В базе пока нет пользователей. Пожалуйста, зарегистрируйтесь.",
+            reply_markup=get_guest_menu_inline()
+        )
+        return
+
+    # Строим клавиатуру с именами пользователей
+    builder = InlineKeyboardBuilder()
+    for user in users:
+        # callback_data="login_user_Ivan"
+        builder.button(text=f"👤 {user}", callback_data=f"login_user_{user}")
+
+    builder.button(text="🔙 Назад", callback_data="start_registration")
+    builder.adjust(2)  # По 2 имени в ряд
+
     await state.set_state(LoginFSM.choose_user)
-
-
-# === Пользователь уже в БД ===
-@router.message(LoginFSM.choose_user)
-async def user_chosen(message: types.Message, state: FSMContext):
-    text = message.text
-
-    if text == "🔙 Меню":
-        await state.set_state(MainMenu.main)
-        await message.answer("Возвращаемся в главное меню.",
-                             reply_markup=reply_buttons.get_main_kb())
-        return
-
-    users = await accountantDB.get_user_list()  # async FIX
-
-    if text not in users:
-        await message.answer("⚠️ Такого пользователя нет, попробуйте снова.")
-        return
-
-    await state.update_data(username=text)
-    await message.answer(
-        f"Введите пароль для пользователя <b>{text}</b> 🔑",
-        parse_mode="HTML",
-        reply_markup=ReplyKeyboardRemove()
+    await callback.message.edit_text(
+        "👇 <b>Выберите свой профиль:</b>",
+        reply_markup=builder.as_markup()
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("login_user_"), LoginFSM.choose_user)
+async def user_selected(callback: types.CallbackQuery, state: FSMContext):
+    """
+    Пользователь выбрал своё имя.
+    """
+    username = callback.data.split("login_user_")[1]
+
+    await state.update_data(username=username)
     await state.set_state(LoginFSM.enter_password)
 
+    await callback.message.edit_text(
+        f"🔑 Профиль: <b>{username}</b>\n\n"
+        "✍️ Введите ваш пароль:",
+        reply_markup=None  # Убираем кнопки, ждем текст
+    )
+    await callback.answer()
 
-# === Проверка пароля ===
+
 @router.message(LoginFSM.enter_password)
 async def check_password(message: types.Message, state: FSMContext):
+    """
+    Проверка пароля.
+    """
     password = message.text
     data = await state.get_data()
     username = data.get("username")
     user_id = message.from_user.id
 
-    if await accountantDB.check_password(username, password):  # async FIX
+    # Попытка удалить сообщение с паролем для безопасности
+    try:
+        await message.delete()
+    except:
+        pass
 
-        await accountantDB.set_logged_in(user_id, username, 1)  # async FIX
+    if await accountantDB.check_password(username, password):
+        # ✅ УСПЕХ
+        await accountantDB.set_logged_in(user_id, username, 1)
 
-        await message.answer(f"✅ Добро пожаловать, {username}!", reply_markup=ReplyKeyboardRemove())
-        await message.answer("Выберите действие:", reply_markup=inline_buttons.get_users_inline())
         await state.set_state(MainMenu.logged_in)
+        await message.answer(
+            f"✅ Добро пожаловать, <b>{username}</b>!",
+            reply_markup=get_main_menu_inline()
+        )
     else:
-        await message.answer("❌ Неверный пароль. Попробуйте снова.")
+        # ❌ ОШИБКА
+        msg = await message.answer("❌ Неверный пароль. Попробуйте снова:")
+        # (Опционально можно добавить кнопку отмены, если забыл пароль)
 
 
-# === Отмена регистрации ===
-@router.message(F.text == "Отменить 🚫")
-async def cancel(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Регистрация отменена.",
-                         reply_markup=ReplyKeyboardRemove())
+# ============================================================
+# 🆕 РЕГИСТРАЦИЯ (НОВЫЙ ПОЛЬЗОВАТЕЛЬ)
+# ============================================================
+
+@router.callback_query(F.data == "auth_new")
+async def start_register_flow(callback: types.CallbackQuery, state: FSMContext):
+    """
+    1. Спрашиваем регион.
+    """
+    await state.set_state(Register.region)
+    await callback.message.edit_text(
+        "📝 <b>Регистрация</b>\n\n"
+        "Введите ваш <b>Регион</b> (например: Алматы):"
+        # Можно добавить Inline кнопки с регионами, если их мало
+    )
+    await callback.answer()
 
 
-# === Регион ===
 @router.message(Register.region)
 async def get_region(message: types.Message, state: FSMContext):
     await state.update_data(region=message.text)
-    await message.answer("Введите логин:", reply_markup=reply_buttons.get_cancel_kb())
+
     await state.set_state(Register.login)
+    await message.answer("👤 Придумайте <b>Логин</b> (Имя пользователя):")
 
 
-# === Логин ===
 @router.message(Register.login)
 async def get_login(message: types.Message, state: FSMContext):
-    await state.update_data(login=message.text)
-    await message.answer("Введите пароль:")
+    username = message.text
+
+    # Проверка, занят ли логин (Опционально, если есть такой метод в БД)
+    # if await accountantDB.user_exists(username): ...
+
+    await state.update_data(login=username)
+
     await state.set_state(Register.password)
+    await message.answer("🔑 Придумайте <b>Пароль</b>:")
 
 
-# === Пароль ===
 @router.message(Register.password)
 async def get_password(message: types.Message, state: FSMContext):
     await state.update_data(password=message.text)
-    await message.answer("Повторите пароль:")
+    try:
+        await message.delete()  # Скрываем пароль
+    except:
+        pass
+
     await state.set_state(Register.confirm)
+    await message.answer("🔐 <b>Повторите пароль</b> для подтверждения:")
 
 
-# === Подтверждение ===
 @router.message(Register.confirm)
 async def confirm_password(message: types.Message, state: FSMContext):
     data = await state.get_data()
 
+    try:
+        await message.delete()
+    except:
+        pass
+
     if message.text != data["password"]:
-        await message.answer("❌ Пароли не совпадают, попробуйте снова.")
+        await message.answer("❌ Пароли не совпадают! Придумайте пароль заново:")
         await state.set_state(Register.password)
         return
 
+    # --- СОХРАНЕНИЕ В БД ---
     user_id = message.from_user.id
     user_name = data["login"]
-    user_password = data["password"]
+    raw_password = data["password"]
     region = data["region"]
 
-    hashed_pw = hash_password(user_password)
+    hashed_pw = hash_password(raw_password)
 
-    # async FIX
-    await accountantDB.add_user(user_id, user_name, hashed_pw, region)
+    try:
+        await accountantDB.add_user(user_id, user_name, hashed_pw, region)
 
-    await state.set_state(MainMenu.main)
-    await message.answer(
-        f"✅ Регистрация завершена!\nЛогин: {user_name}",
-        reply_markup=reply_buttons.get_main_kb()
-    )
+        # Сразу логиним пользователя
+        await accountantDB.set_logged_in(user_id, user_name, 1)
+
+        await state.set_state(MainMenu.logged_in)
+        await message.answer(
+            f"✅ Регистрация успешна!\nВы вошли как <b>{user_name}</b>.",
+            reply_markup=get_main_menu_inline()
+        )
+
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при регистрации: {e}")
+        await state.clear()

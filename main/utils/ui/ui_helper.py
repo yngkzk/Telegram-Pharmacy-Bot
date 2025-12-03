@@ -1,18 +1,21 @@
-# utils/ui_helpers.py
+import asyncio
+from contextlib import suppress
 from aiogram import types
 from aiogram.types import ReplyKeyboardRemove
-
+from aiogram.exceptions import TelegramBadRequest
 
 async def send_inline_menu(message: types.Message, text: str, markup):
     """
-    Универсальная функция:
-    1. Убирает reply-клавиатуру (если есть)
-    2. Отправляет inline-меню
+    Безопасно убирает старую reply-клавиатуру и отправляет новое inline-меню.
     """
-    # Убираем клавиатуру, если открыта
-    await message.answer("...", reply_markup=ReplyKeyboardRemove())
-    # Удаляем этот промежуточный месседж, чтобы не было "..."
-    await message.bot.delete_message(message.chat.id, message.message_id + 1)
+    # 1. Отправляем сообщение для удаления клавиатуры
+    # Мы сохраняем объект msg, чтобы знать точный ID
+    msg_to_delete = await message.answer("⏳ Загрузка...", reply_markup=ReplyKeyboardRemove())
 
-    # Отправляем основное сообщение с inline клавиатурой
+    # 2. Удаляем это сообщение
+    # suppress(TelegramBadRequest) предотвращает краш, если сообщение уже удалено
+    with suppress(TelegramBadRequest):
+        await msg_to_delete.delete()
+
+    # 3. Отправляем целевое меню
     return await message.answer(text, reply_markup=markup)

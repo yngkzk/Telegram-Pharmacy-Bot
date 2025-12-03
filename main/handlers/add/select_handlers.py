@@ -1,113 +1,150 @@
+from contextlib import suppress
+from typing import List, Tuple, Dict
+
 from aiogram import Router, types, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
+
 from storage.temp_data import TempDataManager
 from keyboard.inline.inline_select import build_multi_select_keyboard
 from loader import pharmacyDB
 from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
 
-
 router = Router()
 
 
-# === Загружаем список препаратов перед первым использованием ===
-async def load_items(state: FSMContext):
+# ============================================================
+# 📥 LOAD & CACHE DATA
+# ============================================================
+async def load_items(state: FSMContext) -> List[Tuple[int, str]]:
     """
-    Загружает список препаратов в FSM, если их там ещё нет.
-    Это заменяет глобальный вызов pharmacyDB.get_prep_list().
+    Loads preparations list into FSM.
+    Optimized: Builds the name map immediately to save processing later.
     """
+    # 1. Try to get from cache
     items = await TempDataManager.get(state, "prep_items")
+
     if items is None:
-        items = await pharmacyDB.get_prep_list()  # <-- async!
+        # 2. Fetch from DB
+        raw_rows = await pharmacyDB.get_prep_list()
+
+        # 3. Serialize (Convert Row objects to simple tuples for FSM safety)
+        items = [(row["id"], row["prep"]) for row in raw_rows]
+
+        # 4. Create Map (ID -> Name) once and cache it
+        prep_map = {item_id: name for item_id, name in items}
+
         await TempDataManager.set(state, "prep_items", items)
+        await TempDataManager.set(state, "prep_map", prep_map)
+
     return items
 
 
-# === Выбор препарата (multi-select) ===
+# ============================================================
+# ☑️ TOGGLE SELECTION (Check/Uncheck)
+# ============================================================
 @router.callback_query(F.data.startswith("select_"), PrescriptionFSM.choose_meds)
 async def toggle_selection(callback: types.CallbackQuery, state: FSMContext):
-    prefix, select, option_id = callback.data.split("_")
+    # Parse data: "select_doc_5" -> prefix="doc", option_id=5
+    try:
+        _, prefix, option_id = callback.data.split("_")
+        option_id = int(option_id)
+    except ValueError:
+        await callback.answer("❌ Ошибка данных кнопки")
+        return
 
-    option_id = int(option_id)
-
+    # Load data
     items = await load_items(state)
     selected = await TempDataManager.get(state, "selected_items", [])
 
-    # LOG
-    logger.info(f"TOGGLE_SELECTION: {prefix}_{select}_{option_id}")
-    logger.debug(f"Current FSM - {await state.get_state()}")
-
-    # — Препараты: создаём карту id → имя
-    prep_map = {i: name for i, name in items}
-    await TempDataManager.set(state, "prep_map", prep_map)
-
-    # — Переключение выбора
+    # Toggle Logic
     if option_id in selected:
-        selected.remove(option_id)
+        selected.remove(option_id)  # Uncheck
     else:
-        selected.append(option_id)
+        selected.append(option_id)  # Check
 
+    # Save back to FSM
     await TempDataManager.set(state, "selected_items", selected)
 
+    # Rebuild Keyboard
     new_keyboard = build_multi_select_keyboard(items, selected, prefix)
 
-    try:
+    # Update Message (Ignore "Not Modified" errors)
+    with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=new_keyboard)
-    except TelegramBadRequest:
-        pass
 
     await callback.answer()
 
 
-# === Сброс выбора ===
+# ============================================================
+# 🔄 RESET SELECTION
+# ============================================================
 @router.callback_query(F.data == "reset_selection", PrescriptionFSM.choose_meds)
 async def reset_selection(callback: types.CallbackQuery, state: FSMContext):
     items = await load_items(state)
+    prefix = await TempDataManager.get(state, "prefix", "doc")  # Default fallback
 
+    # Clear selection
     await TempDataManager.set(state, "selected_items", [])
 
-    new_keyboard = build_multi_select_keyboard(items, [])
+    # Reset Keyboard
+    new_keyboard = build_multi_select_keyboard(items, [], prefix)
 
-    try:
+    with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=new_keyboard)
-    except TelegramBadRequest:
-        pass
 
-    await callback.answer("Выбор сброшен ✅")
+    await callback.answer("🗑 Выбор сброшен")
 
 
-# === Подтверждение выбора ===
+# ============================================================
+# ✅ CONFIRM SELECTION
+# ============================================================
 @router.callback_query(F.data == "confirm_selection", PrescriptionFSM.choose_meds)
 async def confirm_selection(callback: types.CallbackQuery, state: FSMContext):
-    selected = await TempDataManager.get(state, "selected_items", [])
+    # 1. Load Data
+    selected_ids = await TempDataManager.get(state, "selected_items", [])
+
+    # Ensure map exists (reload if necessary)
+    await load_items(state)
     prep_map = await TempDataManager.get(state, "prep_map", {})
 
-    if not selected:
-        await callback.answer("⚠️ Ничего не выбрано", show_alert=True)
+    # 2. Validation
+    if not selected_ids:
+        await callback.answer("⚠️ Вы ничего не выбрали!", show_alert=True)
         return
 
-    selected_names = [prep_map.get(i, f"#{i}") for i in selected]
+    # 3. Prepare Names for Display
+    selected_names = [prep_map.get(i, f"Unknown ID {i}") for i in selected_ids]
+    formatted_list = "\n".join(f"• {name}" for name in selected_names)
 
-    # LOG
-    logger.debug(f"Current FSM - {await state.get_state()}")
-    logger.info(f"Пользователь {callback.from_user.first_name} выбрал препараты {selected_names}")
-
+    # 4. Routing Logic (Where do we go next?)
     prefix = await TempDataManager.get(state, "prefix")
 
+    logger.info(f"User {callback.from_user.id} confirmed selection: {selected_ids} (Flow: {prefix})")
+
+    response_text = f"✅ <b>Список сохранён:</b>\n{formatted_list}\n\n"
+
     if prefix == "doc":
+        # DOCTOR FLOW
+        response_text += "✍️ <b>Введите условия договора</b> (например: 10% скидка):"
         await state.set_state(PrescriptionFSM.contract_terms)
-        await callback.message.edit_text("✍️ Введите условие договора")
+
     elif prefix == "apt":
+        # PHARMACY FLOW
+        response_text += "🔢 <b>Введите количество упаковок</b> (целое число):"
+        # FIXED: Now specifically setting the state for quantity
+        await state.set_state(PrescriptionFSM.waiting_for_quantity)
 
-        await callback.message.edit_text("✍️ На какое количество препаратов заявка")
+    else:
+        # Fallback for error safety
+        await callback.answer("⚠️ Ошибка состояния (неизвестный тип)", show_alert=True)
+        return
 
+    # 5. UI Update
+    # Replace the huge button list with the summary text
+    await callback.message.edit_text(response_text)
 
-    # Отвечаем пользователю
-    await callback.message.answer(
-        "📋 Вы выбрали препараты:\n" + "\n".join(f"• {name}" for name in selected_names)
-    )
-    await callback.answer("✅ Выбор сохранён")
-
-    # Очищаем временные данные
-    await TempDataManager.remove(state, "selected_items", "prep_map", "prep_items")
+    # 6. Clean up HEAVY temp data (Keep 'selected_items' as we need them for the final report!)
+    # We remove 'prep_items' and 'prep_map' to free up memory in Redis/RAM
+    await TempDataManager.remove(state, "prep_items", "prep_map")
