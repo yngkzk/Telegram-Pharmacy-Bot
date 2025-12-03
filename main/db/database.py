@@ -1,5 +1,7 @@
 import aiosqlite
 from datetime import datetime
+from typing import Optional, List, Any
+
 from utils.text import pw
 from utils.logger.logger_config import logger
 
@@ -7,68 +9,74 @@ from utils.logger.logger_config import logger
 class BotDB:
     def __init__(self, db_file: str):
         self.db_file = db_file
-        self.conn: aiosqlite.Connection | None = None
+        self.conn: Optional[aiosqlite.Connection] = None
 
     async def connect(self):
         """Асинхронное подключение к базе"""
-        self.conn = await aiosqlite.connect(self.db_file)
-        await self.conn.execute("PRAGMA foreign_keys = ON;")
-        self.conn.row_factory = aiosqlite.Row
-        logger.info(f"Connected to async DB: {self.db_file}")
+        try:
+            self.conn = await aiosqlite.connect(self.db_file)
+            await self.conn.execute("PRAGMA foreign_keys = ON;")
+            self.conn.row_factory = aiosqlite.Row
+            # logger.info(f"Connected to SQLite: {self.db_file}")
+        except Exception as e:
+            logger.critical(f"Connection failed for {self.db_file}: {e}")
+            raise e
 
     async def close(self):
         """Закрытие соединения"""
         if self.conn:
             await self.conn.close()
-            logger.info("Async DB connection closed")
+            logger.info(f"Async DB connection closed for {self.db_file}")
 
     # ============================================================
-    # Вспомогательные методы
+    # 🛠 Вспомогательные методы (The Core Logic)
     # ============================================================
 
-    async def _fetchall(self, query: str, params: tuple = ()):
+    def _ensure_conn(self):
+        """Проверка соединения перед запросом"""
+        if not self.conn:
+            raise ConnectionError(f"Database {self.db_file} is not connected! Call .connect() first.")
+
+    async def _fetchall(self, query: str, params: tuple = ()) -> List[aiosqlite.Row]:
+        self._ensure_conn()
         async with self.conn.execute(query, params) as cursor:
             return await cursor.fetchall()
 
-    async def _fetchone(self, query: str, params: tuple = ()):
+    async def _fetchone(self, query: str, params: tuple = ()) -> Optional[aiosqlite.Row]:
+        self._ensure_conn()
         async with self.conn.execute(query, params) as cursor:
             return await cursor.fetchone()
 
-    async def _execute(self, query: str, params: tuple = ()):
+    async def _execute(self, query: str, params: tuple = ()) -> None:
+        self._ensure_conn()
         await self.conn.execute(query, params)
         await self.conn.commit()
 
     # ============================================================
-    # USERS
+    # 👤 USERS
     # ============================================================
 
     async def user_exists(self, user_id: int) -> bool:
-        result = await self._fetchone(
-            "SELECT 1 FROM users WHERE user_id = ?",
-            (user_id,)
-        )
+        result = await self._fetchone("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
         return result is not None
 
-    async def get_user_id(self, user_id: int) -> int | None:
-        row = await self._fetchone(
-            "SELECT user_id FROM users WHERE user_id = ?",
-            (user_id,)
-        )
+    async def get_user_id(self, user_id: int) -> Optional[int]:
+        row = await self._fetchone("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
         return row["user_id"] if row else None
 
-    async def get_active_username(self, user_id: int) -> str | None:
-        cursor = await self.conn.execute(
+    async def get_active_username(self, user_id: int) -> Optional[str]:
+        # FIXED: Consistent Row access
+        row = await self._fetchone(
             "SELECT user_name FROM users WHERE user_id = ? AND logged_in = 1",
             (user_id,)
         )
-        row = await cursor.fetchone()
-        return row[0] if row else None
+        return row["user_name"] if row else None
 
-    async def get_user_list(self):
+    async def get_user_list(self) -> List[str]:
         rows = await self._fetchall("SELECT user_name FROM users")
         return [row["user_name"] for row in rows]
 
-    async def add_user(self, user_id, user_name, user_password, region):
+    async def add_user(self, user_id: int, user_name: str, user_password: str, region: str):
         await self._execute("""
             INSERT INTO users (user_id, user_name, join_date, user_password, region, logged_in)
             VALUES (?, ?, ?, ?, ?, 1)
@@ -79,34 +87,30 @@ class BotDB:
             "SELECT logged_in FROM users WHERE user_id = ? AND user_name = ?",
             (user_id, user_name)
         )
-        return row and row["logged_in"] == 1
+        return bool(row and row["logged_in"] == 1)
 
     async def check_password(self, username: str, password: str) -> bool:
-        row = await self._fetchone(
-            "SELECT user_password FROM users WHERE user_name = ?",
-            (username,)
-        )
+        row = await self._fetchone("SELECT user_password FROM users WHERE user_name = ?", (username,))
         if not row:
             return False
         return pw.check_password(password, row["user_password"])
 
-    async def set_logged_in(self, user_id, username: str, status: bool):
+    async def set_logged_in(self, user_id: int, username: str, status: bool):
+        # Convert bool to int (0/1) for SQLite
+        status_int = 1 if status else 0
         await self._execute(
             "UPDATE users SET logged_in = ? WHERE user_id = ? AND user_name = ?",
-            (status, user_id, username)
+            (status_int, user_id, username)
         )
 
-    async def logout_user(self, user_id):
-        await self._execute(
-            "UPDATE users SET logged_in = 0 WHERE user_id = ?",
-            (user_id,)
-        )
+    async def logout_user(self, user_id: int):
+        await self._execute("UPDATE users SET logged_in = 0 WHERE user_id = ?", (user_id,))
 
     # ============================================================
-    # LPU
+    # 🏥 LPU (Medical Facilities)
     # ============================================================
 
-    async def add_lpu(self, road_id, pharmacy_name, pharmacy_url):
+    async def add_lpu(self, road_id: int, pharmacy_name: str, pharmacy_url: str):
         await self._execute("""
             INSERT INTO lpu (road_id, pharmacy_name, pharmacy_url)
             VALUES (?, ?, ?)
@@ -122,14 +126,15 @@ class BotDB:
         """, (district, road))
 
     # ============================================================
-    # APOTHECARY
+    # 💊 APOTHECARY
     # ============================================================
 
     async def add_apothecary(self, road_id):
-        pass
+        # FIXED: Explicit error instead of silent pass
+        raise NotImplementedError("This method is not yet implemented")
 
     async def get_apothecary_list(self, district: str, road: int):
-        return await self._fetchall( """
+        return await self._fetchall("""
             SELECT a.id, a.name, a.url
             FROM apothecary AS a
             JOIN roads AS r ON r.road_id = a.road_id
@@ -138,7 +143,7 @@ class BotDB:
         """, (district, road))
 
     # ============================================================
-    # DOCTORS
+    # 👨‍⚕️ DOCTORS
     # ============================================================
 
     async def add_doc(self, lpu_id, doctor_name, spec_id, number, birthdate):
@@ -165,25 +170,18 @@ class BotDB:
         """, (doc_id,))
 
     # ============================================================
-    # OTHER TABLES
+    # 📂 OTHER TABLES
     # ============================================================
 
     async def get_district_list(self):
-        rows = await self._fetchall("SELECT id, name FROM districts")
-        logger.info(f"District rows: {rows}")
-        return rows
+        return await self._fetchall("SELECT id, name FROM districts")
 
     async def get_road_list(self):
         rows = await self._fetchall("SELECT DISTINCT road_num FROM roads")
-        road_list = [row["road_num"] for row in rows if row["road_num"] is not None]
-        return road_list
+        return [row["road_num"] for row in rows if row["road_num"] is not None]
 
     async def get_spec_list(self):
-        return await self._fetchall(
-            "SELECT main_spec_id, spec FROM main_specs"
-        )
+        return await self._fetchall("SELECT main_spec_id, spec FROM main_specs")
 
     async def get_prep_list(self):
-        return await self._fetchall(
-            "SELECT id, prep FROM medication"
-        )
+        return await self._fetchall("SELECT id, prep FROM medication")

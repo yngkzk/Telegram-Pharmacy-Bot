@@ -93,19 +93,21 @@ async def confirm_selection(callback: types.CallbackQuery, state: FSMContext):
     logger.debug(f"Current FSM - {await state.get_state()}")
     logger.info(f"Пользователь {callback.from_user.first_name} выбрал препараты {selected_names}")
 
-    await state.set_state(PrescriptionFSM.contract_terms)
+    prefix = await TempDataManager.get(state, "prefix")
 
+    if prefix == "doc":
+        await state.set_state(PrescriptionFSM.contract_terms)
+        await callback.message.edit_text("✍️ Введите условие договора")
+    elif prefix == "apt":
+
+        await callback.message.edit_text("✍️ На какое количество препаратов заявка")
+
+
+    # Отвечаем пользователю
     await callback.message.answer(
         "📋 Вы выбрали препараты:\n" + "\n".join(f"• {name}" for name in selected_names)
     )
-    await callback.message.edit_text("✍️ Введите условие договора")
-
-    # очищаем временные данные
-    await TempDataManager.remove(state, "selected_items", "prep_map", "prep_items")
-
-    # LOG
-    logger.info(f"CONFIRM_SELECTION: {await TempDataManager.get(state, "selected_items", [])},"
-                f"{await TempDataManager.get(state, "prep_map", {})}"
-                f"{await TempDataManager.get(state, "prep_items")}")
-
     await callback.answer("✅ Выбор сохранён")
+
+    # Очищаем временные данные
+    await TempDataManager.remove(state, "selected_items", "prep_map", "prep_items")

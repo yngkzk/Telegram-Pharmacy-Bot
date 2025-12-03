@@ -36,6 +36,7 @@ async def get_prep_inline(state, prefix):
     """
     items = await pharmacyDB.get_prep_list()
 
+    await TempDataManager.set(state, key="prefix", value=prefix)
     selected = await TempDataManager.get(state, "selected_items", [])
 
     return build_multi_select_keyboard(items, selected, prefix)

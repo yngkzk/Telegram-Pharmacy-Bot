@@ -71,10 +71,9 @@ async def confirm_yes(callback: types.CallbackQuery, state: FSMContext):
     elif current_state == PrescriptionFSM.choose_request.state:
         await state.set_state(PrescriptionFSM.choose_meds)
         logger.info("Перехожу в состояние choose_meds для пользователя %s", callback.from_user.id)
-
         # inline_select.get_prep_inline — async (в нашем рефакторинге)
         keyboard = await inline_select.get_prep_inline(state=state, prefix="apt")
-        await callback.message.answer("👨‍⚕️ Выберите препараты", reply_markup=keyboard)
+        await callback.message.edit_text("👨‍⚕️ Выберите препараты", reply_markup=keyboard)
 
     # === Подтверждение добавления врача — завершающий шаг ===
     elif current_state == AddDoctor.waiting_for_bd.state:
