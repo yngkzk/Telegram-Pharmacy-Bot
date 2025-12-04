@@ -7,6 +7,8 @@ from storage.temp_data import TempDataManager
 
 # Ensure these states are defined in your project
 from states.add.add_state import AddDoctor, AddPharmacy
+from states.add.prescription_state import PrescriptionFSM
+
 from keyboard.inline.inline_buttons import (
     get_lpu_inline,
     get_spec_inline
@@ -56,11 +58,11 @@ async def add_item(callback: CallbackQuery, state: FSMContext):
         return
 
     if prefix == "lpu":
-        await callback.message.answer("🏥 <b>Добавление ЛПУ</b>\nВведите название:")
+        await callback.message.edit_text("🏥 <b>Добавление ЛПУ</b>\nВведите название:")
         await state.set_state(AddPharmacy.waiting_for_name)
 
     elif prefix == "doc":
-        await callback.message.answer("👨‍⚕️ <b>Добавление врача</b>\nВведите ФИО врача:")
+        await callback.message.edit_text("👨‍⚕️ <b>Добавление врача</b>\nВведите ФИО врача:")
         await state.set_state(AddDoctor.waiting_for_name)
 
     else:
@@ -111,8 +113,8 @@ async def add_lpu_url(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка при сохранении в базу данных.")
 
     finally:
-        # CRITICAL: Always clear state when done
-        await state.clear()
+        # CRITICAL: SET STATE IN LPU
+        await state.set_state(PrescriptionFSM.choose_lpu)
 
 
 # ============================================================
@@ -173,42 +175,84 @@ async def add_doctor_spec_callback(callback: CallbackQuery, state: FSMContext):
 async def add_doctor_num(message: Message, state: FSMContext):
     raw_phone = message.text.strip()
 
-    # Allow skipping
-    if raw_phone.lower() in ['нет', '-', 'no']:
+    # 1. Проверка: Хочет ли пользователь пропустить?
+    if raw_phone.lower() in ['нет', '-', 'no', 'не знаю']:
         phone = None
         msg = "⏩ Номер пропущен."
-    else:
-        phone = text_utils.validate_phone_number(raw_phone)
-        if phone:
-            msg = f"✅ Номер сохранён: {phone}"
-        else:
-            msg = "⚠️ Формат не распознан, сохраняю как есть."
-            phone = raw_phone  # Save raw if validation fails but user insists? Or set None.
 
-    await TempDataManager.set(state, "tp_dr_phone", phone)
-    await message.answer(f"{msg}\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):")
-    await state.set_state(AddDoctor.waiting_for_bd)
+        # Сохраняем и идем дальше
+        await TempDataManager.set(state, "tp_dr_phone", phone)
+        await message.answer(f"{msg}\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):")
+        await state.set_state(AddDoctor.waiting_for_bd)
+        return
+
+    # 2. Проверка валидности номера
+    phone = text_utils.validate_phone_number(raw_phone)
+
+    if phone:
+        # ✅ УСПЕХ: Номер валиден
+        await TempDataManager.set(state, "tp_dr_phone", phone)
+
+        await message.answer(f"✅ Номер сохранён: {phone}\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):")
+        # Переходим к следующему шагу
+        await state.set_state(AddDoctor.waiting_for_bd)
+    else:
+        # ❌ ОШИБКА: Формат неверный -> ПОВТОРЯЕМ ВОПРОС
+        await message.answer(
+            "⚠️ <b>Неверный формат номера!</b>\n"
+            "Пожалуйста, введите номер в формате: <code>+77011234567</code>\n"
+            "Или отправьте '<b>-</b>', чтобы пропустить этот шаг."
+        )
+        # ⛔️ ВАЖНО: Мы НЕ меняем состояние и делаем return,
+        # чтобы бот остался ждать ввод номера.
+        return
 
 
 # Step 4: Birthdate -> Save to DB
 @router.message(AddDoctor.waiting_for_bd)
 async def add_doctor_bd(message: Message, state: FSMContext):
-    birthdate = text_utils.validate_date(message.text)
+    raw_date = message.text.strip()
+    birthdate = None
 
-    # Retrieve all needed data
+    # 1. Проверка: Хочет ли пользователь пропустить?
+    if raw_date.lower() in ['нет', '-', 'no', 'не знаю']:
+        birthdate = None
+        # Не делаем return, просто идем дальше сохранять с birthdate=None
+
+    # 2. Проверка валидности даты
+    else:
+        # validate_date возвращает строку (если ок) или None (если ошибка)
+        birthdate = text_utils.validate_date(raw_date)
+
+        if not birthdate:
+            # ❌ ОШИБКА: Формат неверный -> ПОВТОРЯЕМ ВОПРОС
+            await message.answer(
+                "⚠️ <b>Неверный формат даты!</b>\n"
+                "Введите дату в формате: <code>ДД.ММ.ГГГГ</code> (например: 25.01.1990)\n"
+                "Или отправьте '<b>Нет</b>', чтобы пропустить."
+            )
+            # ⛔️ Return останавливает функцию, бот остается в том же состоянии
+            return
+
+    # --- Если мы дошли сюда, значит дата валидна ИЛИ пропущена ---
+
+    # 3. Retrieve all needed data
     try:
         lpu_id, name, spec, phone = await TempDataManager.get_many(
             state, "lpu_id", "tp_dr_name", "tp_dr_spec", "tp_dr_phone"
         )
     except Exception as e:
+        logger.error(f"Session data lost: {e}")
         await message.answer("❌ Данные сессии утеряны. Начните заново.")
         await state.clear()
         return
 
+    # 4. Save to DB
     try:
-        # Save to DB
+        # Save to DB (birthdate will be a string or None)
         await pharmacyDB.add_doc(lpu_id, name, spec, phone, birthdate)
-        logger.info(f"✅ Doctor added: {name}, SpecID: {spec}")
+
+        logger.info(f"✅ Doctor added: {name}, SpecID: {spec}, BD: {birthdate}")
         await message.answer("✅ <b>Врач успешно добавлен!</b>")
 
     except Exception as e:
@@ -216,4 +260,5 @@ async def add_doctor_bd(message: Message, state: FSMContext):
         await message.answer("❌ Не удалось сохранить врача в базу данных.")
 
     finally:
+        # Always clear state at the end of the wizard
         await state.clear()

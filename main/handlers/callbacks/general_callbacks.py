@@ -270,31 +270,38 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
 
     # 1. Сценарий Аптеки: "Есть ли заявка?"
     if current_state == PrescriptionFSM.choose_apothecary.state:
+
+        # 🔥 FIX: Всегда устанавливаем prefix="apt", даже если нажали НЕТ
+        await TempDataManager.set(state, "prefix", "apt")
+
         if is_yes:
-            # ДА: Идем выбирать препараты
+            # ДА: Идем выбирать препараты -> вводим кол-во -> вводим остатки
             await state.set_state(PrescriptionFSM.choose_meds)
-            await TempDataManager.set(state, "prefix", "apt")
 
             keyboard = await inline_select.get_prep_inline(state, prefix="apt")
             await callback.message.edit_text("💊 Выберите препараты из списка:", reply_markup=keyboard)
         else:
-            # НЕТ: Сразу к комментарию (пропускаем выбор и ввод количества)
-            await callback.message.edit_text("👌 Хорошо, без заявки.")
+            # НЕТ: Это просто визит без заявки
+            # 🔥 FIX: Устанавливаем нули, чтобы в отчете не было "None"
+            await TempDataManager.set(state, "quantity", 0)
+            await TempDataManager.set(state, "remaining", 0)
+            await TempDataManager.set(state, "selected_items", [])  # Препараты не выбраны
+
+            # Пропускаем выбор препаратов и ввод чисел -> сразу к комментарию
+            await callback.message.edit_text("👌 Хорошо, визит без заявки.")
             await state.set_state(PrescriptionFSM.pharmacy_comments)
             await callback.message.answer("✍️ Напишите комментарий к визиту:")
 
         await callback.answer()
         return
 
-    # 2. Сценарий Добавления Врача (если используется AddDoctor FSM)
-    # Если вы используете state: AddDoctor.waiting_for_confirmation
+    # 2. Сценарий Добавления Врача (AddDoctor)
     if current_state == AddDoctor.waiting_for_confirmation.state:
         if is_yes:
             await callback.message.edit_text("✅ Врач успешно добавлен!")
+            # Тут можно вызвать функцию сохранения в БД, если она еще не вызывалась
         else:
             await callback.message.edit_text("❌ Добавление отменено.")
         await state.clear()
         await callback.answer()
         return
-
-    await callback.answer("⚠️ Неизвестный контекст", show_alert=True)
