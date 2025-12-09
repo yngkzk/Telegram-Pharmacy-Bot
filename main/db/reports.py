@@ -127,3 +127,138 @@ class ReportRepository:
             "commentary": main_data["commentary"],
             "preps": [p["prep"] for p in preps_data]
         }
+
+    # ============================================================
+    # 4. (NEW) SAVE PHARMACY REPORT (MAIN)
+    # ============================================================
+    async def save_apothecary_report(
+            self,
+            user: str,
+            district: str,
+            road: str,
+            lpu: str,
+            comment: str
+    ) -> int:
+        """
+        Saves the main header for a pharmacy report.
+        Returns the new Report ID.
+        """
+        self._ensure_conn()
+
+        query = '''
+            INSERT INTO apothecary_report
+            (date, user, district, road, apothecary, commentary)
+            VALUES (?, ?, ?, ?, ?, ?)
+        '''
+
+        date_value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        async with self.conn.execute(
+                query,
+                (date_value, user, district, road, lpu, comment)
+        ) as cursor:
+            await self.conn.commit()
+            logger.info(f"New Apothecary report saved. ID: {cursor.lastrowid}")
+            return cursor.lastrowid
+
+    # ============================================================
+    # 5. (NEW) SAVE PHARMACY ITEMS (DETAILS)
+    # ============================================================
+    async def save_apothecary_preps(self, report_id: int, items: List[tuple]) -> None:
+        """
+        Saves the list of medications with quantities.
+
+        :param report_id: ID of the main report
+        :param items: A list of tuples: [("MedName", "Quantity"), ("MedName2", "Qty")]
+        """
+        self._ensure_conn()
+
+        if not items:
+            return
+
+        # Prepare data for executemany
+        # We ensure the structure matches: (report_id, prep_name, remaining/quantity)
+        data = [(report_id, name, str(qty)) for name, qty in items]
+
+        await self.conn.executemany(
+            '''
+            INSERT INTO apothecary_detailed_report (report_id, prep, remaining)
+            VALUES (?, ?, ?)
+            ''',
+            data
+        )
+        await self.conn.commit()
+
+    # ============================================================
+    # 🔍 GET LAST REPORT FOR DOCTOR
+    # ============================================================
+    async def get_last_doctor_report(self, user: str, doc_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetches the most recent report for a specific doctor by the current user.
+        """
+        self._ensure_conn()
+
+        # 1. Find the latest report ID
+        query = '''
+            SELECT id, date, term, commentary 
+            FROM main_reports 
+            WHERE user = ? AND doc_name = ? 
+            ORDER BY date DESC 
+            LIMIT 1
+        '''
+
+        async with self.conn.execute(query, (user, doc_name)) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        report_id = row["id"]
+
+        # 2. Get the medications for this report
+        async with self.conn.execute("SELECT prep FROM detailed_report WHERE report_id = ?", (report_id,)) as cursor:
+            preps_rows = await cursor.fetchall()
+            preps = [p["prep"] for p in preps_rows]
+
+        return {
+            "date": row["date"],
+            "term": row["term"],
+            "commentary": row["commentary"],
+            "preps": preps
+        }
+
+    # ============================================================
+    # 📊 EXPORT METHODS (FETCH ALL DATA)
+    # ============================================================
+    async def fetch_all_doctor_data(self):
+        """Fetches joined Doctor reports + Medications"""
+        self._ensure_conn()
+        query = """
+            SELECT 
+                m.id, m.date, m.user, m.district, m.road, m.lpu, 
+                m.doc_name, m.doc_spec, m.doc_num, m.term, m.commentary,
+                d.prep
+            FROM main_reports m
+            LEFT JOIN detailed_report d ON m.id = d.report_id
+            ORDER BY m.date DESC
+        """
+        async with self.conn.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def fetch_all_apothecary_data(self):
+        """Fetches joined Pharmacy reports + Items"""
+        self._ensure_conn()
+        # Note: 'apothecary' column in DB acts as LPU name
+        query = """
+            SELECT 
+                a.id, a.date, a.user, a.district, a.road, a.apothecary as lpu_name, 
+                a.commentary,
+                ad.prep, ad.remaining
+            FROM apothecary_report a
+            LEFT JOIN apothecary_detailed_report ad ON a.id = ad.report_id
+            ORDER BY a.date DESC
+        """
+        async with self.conn.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
