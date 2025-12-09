@@ -159,6 +159,60 @@ async def get_spec_inline(state=None) -> InlineKeyboardMarkup:
                                          add_back=False)  # No back needed here usually
 
 
-async def get_doctors_inline(state, lpu) -> InlineKeyboardMarkup:
-    items = await pharmacyDB.get_doctors_list(lpu)
-    return await build_shortcut_keyboard(items, state=state, prefix="doc", add_back=True, add_button=True)
+# Constants
+PAGE_SIZE = 10  # How many doctors to show per page
+
+
+async def get_doctors_inline(state, lpu_id: int, page: int = 1) -> InlineKeyboardMarkup:
+    """
+    Generates a keyboard with doctors, supporting pagination.
+    """
+    # 1. Get ALL doctors for this LPU
+    # (Assuming pharmacyDB.get_doctors returns a list of dicts/rows)
+    all_doctors = await pharmacyDB.get_doctors(lpu_id)
+
+    # 2. Slice the list for the current page
+    start_index = (page - 1) * PAGE_SIZE
+    end_index = start_index + PAGE_SIZE
+    current_doctors = all_doctors[start_index:end_index]
+
+    builder = InlineKeyboardBuilder()
+
+    # 3. Add Doctor Buttons
+    for doc in current_doctors:
+        # Assuming your row has 'id' and 'name' (or 'doctor')
+        # Adjust key names matches your DB row
+        d_name = doc['doctor']
+        d_id = doc['id']
+
+        builder.button(text=f"👨‍⚕️ {d_name}", callback_data=f"doc_{d_id}")
+
+    # Layout: 1 column of doctors
+    builder.adjust(1)
+
+    # 4. Navigation Buttons (Next / Back)
+    nav_buttons = []
+
+    # "Back" button if not on the first page
+    if page > 1:
+        nav_buttons.append(
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=f"docpage_{lpu_id}_{page - 1}")
+        )
+
+    # "Next" button if there are more doctors
+    if end_index < len(all_doctors):
+        nav_buttons.append(
+            InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"docpage_{lpu_id}_{page + 1}")
+        )
+
+    # 5. "Add New" button (e.g. Add Doctor)
+    nav_buttons.append(InlineKeyboardButton(text="➕ Добавить", callback_data="add_doc"))
+
+    # Add navigation row
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    # 6. "Back to LPU List" or Main Menu
+    builder.row(InlineKeyboardButton(text="🔙 Меню", callback_data="back_to_main"))
+
+    return builder.as_markup()
