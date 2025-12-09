@@ -143,7 +143,7 @@ async def start_register_flow(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Register.region)
     await callback.message.edit_text(
         "📝 <b>Регистрация</b>\n\n"
-        "Введите ваш <b>Регион</b> (например: Алматы):"
+        "Введите ваш <b>Регион</b> (например: АЛА или ЮКО):"
         # Можно добавить Inline кнопки с регионами, если их мало
     )
     await callback.answer()
