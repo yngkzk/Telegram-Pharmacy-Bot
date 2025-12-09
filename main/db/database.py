@@ -129,9 +129,17 @@ class BotDB:
     # 💊 APOTHECARY
     # ============================================================
 
-    async def add_apothecary(self, road_id):
-        # FIXED: Explicit error instead of silent pass
-        raise NotImplementedError("This method is not yet implemented")
+    async def add_apothecary_place(self, road_id: int, name: str, url: str):
+        """
+        Adds a new Pharmacy (Place) to the 'apothecary' table.
+        """
+        self._ensure_conn()  # Check connection
+
+        await self._execute(
+            "INSERT INTO apothecary (road_id, name, url) VALUES (?, ?, ?)",
+            (road_id, name, url)
+        )
+        logger.info(f"Added Apothecary place: {name}")
 
     async def get_apothecary_list(self, district: str, road: int):
         return await self._fetchall("""
@@ -152,20 +160,33 @@ class BotDB:
             VALUES (?, ?, ?, ?, ?)
         """, (lpu_id, doctor_name, spec_id, number, birthdate))
 
+    async def get_doctor_name(self, doc_id: int) -> str:
+        """Fetches the full name of the doctor by ID."""
+        self._ensure_conn()
+        # Table is 'doctors', column is 'doctor' (based on your schema)
+        res = await self._fetchone("SELECT doctor FROM doctors WHERE id = ?", (doc_id,))
+        return res["doctor"] if res else "Unknown Doctor"
+
+    async def get_doctors(self, lpu_id: int):
+        # Make sure there is NO "LIMIT" clause here
+        sql = "SELECT * FROM doctors WHERE lpu_id = ?"
+        return await self._fetchall(sql, (lpu_id,))
+
     async def get_doctors_list(self, lpu_id: int):
         return await self._fetchall("""
             SELECT d.id, d.doctor, s.spec, d.numb
             FROM doctors d
-            JOIN specs s ON d.spec_id = s.spec_id
+            JOIN specs s ON d.spec_id = s.spec
             WHERE d.lpu_id = ?
             ORDER BY d.id
         """, (lpu_id,))
 
     async def get_doc_stats(self, doc_id: int):
         return await self._fetchone("""
-            SELECT s.spec, d.numb
+            SELECT ms.spec, d.numb
             FROM doctors d
             JOIN specs s ON d.spec_id = s.spec_id
+            JOIN main_specs ms ON s.ms_id = ms.main_spec_id
             WHERE d.id = ?
         """, (doc_id,))
 
@@ -185,3 +206,14 @@ class BotDB:
 
     async def get_prep_list(self):
         return await self._fetchall("SELECT id, prep FROM medication")
+
+    # ============================================================
+    # 🔍 LOOKUP METHODS (Get Name by ID)
+    # ============================================================
+
+    async def get_district_name(self, district_id: int) -> str:
+        """Translates District ID -> District Name"""
+        self._ensure_conn()
+        # ⚠️ CHECK TABLE NAME: Assuming 'districts' and column 'name'
+        res = await self._fetchone("SELECT name FROM districts WHERE id = ?", (district_id,))
+        return res["name"] if res else "Unknown"
