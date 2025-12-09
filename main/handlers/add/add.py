@@ -5,13 +5,15 @@ from aiogram.fsm.context import FSMContext
 from loader import pharmacyDB
 from storage.temp_data import TempDataManager
 
-# Ensure these states are defined in your project
-from states.add.add_state import AddDoctor, AddPharmacy
+# Ensure AddApothecary is defined in states/add/add_state.py
+from states.add.add_state import AddDoctor, AddPharmacy, AddApothecary
 from states.add.prescription_state import PrescriptionFSM
 
 from keyboard.inline.inline_buttons import (
+    get_doctors_inline,
     get_lpu_inline,
-    get_spec_inline
+    get_spec_inline,
+    get_apothecary_inline
 )
 
 from utils.text import text_utils
@@ -21,7 +23,7 @@ router = Router()
 
 
 # ============================================================
-# 🚫 GENERIC CANCEL HANDLER (Best Practice)
+# 🚫 GENERIC CANCEL HANDLER
 # ============================================================
 @router.message(F.text.casefold() == "отмена")
 @router.callback_query(F.data == "cancel")
@@ -46,24 +48,35 @@ async def cancel_handler(event: Message | CallbackQuery, state: FSMContext):
 # ============================================================
 @router.callback_query(F.data.startswith("add_"))
 async def add_item(callback: CallbackQuery, state: FSMContext):
-    """Starts the add process for LPU or Doctor."""
+    """Starts the add process for LPU, Doctor, or Apothecary (Pharmacy)."""
     await callback.message.edit_reply_markup(reply_markup=None)
 
-    # Safely unpack data
     try:
         _, prefix = callback.data.split("_")
+
+        # 🕵️‍♂️ DEBUG PRINT: Look at your console when you click the button!
+        logger.info(f"DEBUG: Received prefix '{prefix}'")
+
     except ValueError:
         logger.error(f"Invalid callback data: {callback.data}")
         await callback.answer("Error", show_alert=True)
         return
 
+    # --- LPU (Hospital/Clinic) ---
     if prefix == "lpu":
         await callback.message.edit_text("🏥 <b>Добавление ЛПУ</b>\nВведите название:")
         await state.set_state(AddPharmacy.waiting_for_name)
 
+    # --- DOCTOR ---
     elif prefix == "doc":
         await callback.message.edit_text("👨‍⚕️ <b>Добавление врача</b>\nВведите ФИО врача:")
         await state.set_state(AddDoctor.waiting_for_name)
+
+    # --- APOTHECARY (Pharmacy Place) ---
+    # Based on DB schema: apothecary table has (road_id, name, url)
+    elif prefix == "apothecary":
+        await callback.message.edit_text("💊 <b>Добавление Аптеки</b>\nВведите название аптеки:")
+        await state.set_state(AddApothecary.waiting_for_name)
 
     else:
         await callback.answer("⚠️ Неизвестный тип", show_alert=True)
@@ -72,7 +85,7 @@ async def add_item(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# 🏥 FLOW: ADD PHARMACY (LPU)
+# 🏥 FLOW: ADD PHARMACY (LPU - Hospital)
 # ============================================================
 @router.message(AddPharmacy.waiting_for_name)
 async def add_lpu_name(message: Message, state: FSMContext):
@@ -90,22 +103,20 @@ async def add_lpu_name(message: Message, state: FSMContext):
 async def add_lpu_url(message: Message, state: FSMContext):
     url = message.text.strip()
 
-    # 1. Retrieve Data
     try:
-        name, district, road = await TempDataManager.get_many(state, "lpu_name", "district", "road")
+        # Retrieve Road ID from state (saved during selection)
+        name, district, road_id = await TempDataManager.get_many(state, "lpu_name", "district", "road")
     except Exception as e:
         logger.error(f"State data missing: {e}")
         await message.answer("❌ Ошибка данных. Попробуйте начать заново.")
         await state.clear()
         return
 
-    # 2. Database Operation
     try:
-        await pharmacyDB.add_lpu(road, name, url)
-        logger.info(f"✅ Added LPU: {name} (Road: {road})")
+        await pharmacyDB.add_lpu(road_id, name, url)
+        logger.info(f"✅ Added LPU: {name} (Road ID: {road_id})")
 
-        # 3. Success & Reset
-        keyboard = await get_lpu_inline(state, district, road)
+        keyboard = await get_lpu_inline(state, district, road_id)
         await message.answer(f"✅ ЛПУ <b>{name}</b> успешно добавлено!", reply_markup=keyboard)
 
     except Exception as e:
@@ -113,152 +124,153 @@ async def add_lpu_url(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка при сохранении в базу данных.")
 
     finally:
-        # CRITICAL: SET STATE IN LPU
         await state.set_state(PrescriptionFSM.choose_lpu)
 
 
 # ============================================================
-# 👨‍⚕️ FLOW: ADD DOCTOR
+# 💊 FLOW: ADD APOTHECARY (Pharmacy Place)
 # ============================================================
+# Matches DB Table: apothecary (road_id, name, url)
 
-# Step 1: Name -> Ask for Spec
+@router.message(AddApothecary.waiting_for_name)
+async def add_apt_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if len(name) < 2:
+        await message.answer("⚠️ Название слишком короткое.")
+        return
+
+    await TempDataManager.set(state, "apt_name", name)
+    # Since DB asks for URL (like LPU), we ask for it here
+    await message.answer("🔗 Отправьте ссылку (URL) на аптеку из 2GIS:")
+    await state.set_state(AddApothecary.waiting_for_url)
+
+
+@router.message(AddApothecary.waiting_for_url)
+async def add_apt_url(message: Message, state: FSMContext):
+    url = message.text.strip()
+
+    try:
+        # We need the ROAD_ID to save the pharmacy to the correct location
+        name = await TempDataManager.get(state, "apt_name")
+        road_id = await TempDataManager.get(state, "road")  # Ensure 'road' key holds the ID
+        district = await TempDataManager.get(state, "district")
+    except Exception as e:
+        logger.error(f"Session data lost: {e}")
+        await message.answer("❌ Данные сессии утеряны.")
+        await state.clear()
+        return
+
+    try:
+        # ⚠️ You need to add this method to your pharmacyDB class:
+        # INSERT INTO apothecary (road_id, name, url) VALUES (?, ?, ?)
+        await pharmacyDB.add_apothecary_place(road_id, name, url)
+
+        # Refresh list (Assuming you have a get_apothecary_inline or similar)
+        # If not, redirect to main menu or generic list
+        keyboard = await get_apothecary_inline(state, district, road_id)
+        await message.answer(f"✅ Аптека <b>{name}</b> успешно добавлена!", reply_markup=keyboard)
+
+        # Optional: Show list if you have a keyboard generator for apothecaries
+        # keyboard = await get_lpu_inline(state, district, road_id, type="apt")
+        # await message.answer("Список обновлен:", reply_markup=keyboard)
+
+    except Exception as e:
+        logger.critical(f"DB Error adding Apothecary: {e}")
+        await message.answer("❌ Не удалось сохранить аптеку.")
+
+    finally:
+        await state.set_state(PrescriptionFSM.choose_apothecary)
+
+
+# ============================================================
+# 👨‍⚕️ FLOW: ADD DOCTOR (Person)
+# ============================================================
 @router.message(AddDoctor.waiting_for_name)
 async def add_doctor_name(message: Message, state: FSMContext):
     fio = message.text.strip()
-
-    # Save name
     await TempDataManager.set(state, "tp_dr_name", fio)
-
-    # Get specs for keyboard (Assuming you have a function for this)
-    # If get_spec_inline() needs arguments, make sure to pass them
     keyboard = await get_spec_inline(state)
-
     await message.answer(
-        f"👤 Врач: <b>{fio}</b>\nТеперь выберите специальность (или напишите текстом):",
+        f"👤 Врач: <b>{fio}</b>\nТеперь выберите специальность:",
         reply_markup=keyboard
     )
     await state.set_state(AddDoctor.waiting_for_spec)
 
 
-# Step 2a: Spec via Text
 @router.message(AddDoctor.waiting_for_spec)
 async def add_doctor_spec_text(message: Message, state: FSMContext):
     spec = message.text.strip()
-
-    # WARNING: Your DB expects spec_id (int). If user types text,
-    # you might need to handle this (e.g., save as 0 or 'Other').
-    # For now, saving as string and assuming DB handles it or it's a temp placeholder.
     await TempDataManager.set(state, "tp_dr_spec", value=spec)
-
     await message.answer("📱 Введите номер телефона (или 'нет'):")
     await state.set_state(AddDoctor.waiting_for_number)
 
 
-# Step 2b: Spec via Button
 @router.callback_query(AddDoctor.waiting_for_spec, F.data.startswith("main_spec_"))
 async def add_doctor_spec_callback(callback: CallbackQuery, state: FSMContext):
-    # Extract ID from "main_spec_5" -> "5"
     spec_id = callback.data.split("_")[-1]
-
     await TempDataManager.set(state, "tp_dr_spec", spec_id)
-
-    # Remove keyboard to prevent double clicks
     await callback.message.edit_reply_markup(reply_markup=None)
-
     await callback.message.answer("📱 Введите номер телефона (или 'нет'):")
     await state.set_state(AddDoctor.waiting_for_number)
     await callback.answer()
 
 
-# Step 3: Phone -> Ask for Birthdate
 @router.message(AddDoctor.waiting_for_number)
 async def add_doctor_num(message: Message, state: FSMContext):
     raw_phone = message.text.strip()
 
-    # 1. Проверка: Хочет ли пользователь пропустить?
     if raw_phone.lower() in ['нет', '-', 'no', 'не знаю']:
         phone = None
         msg = "⏩ Номер пропущен."
-
-        # Сохраняем и идем дальше
         await TempDataManager.set(state, "tp_dr_phone", phone)
         await message.answer(f"{msg}\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):")
         await state.set_state(AddDoctor.waiting_for_bd)
         return
 
-    # 2. Проверка валидности номера
     phone = text_utils.validate_phone_number(raw_phone)
 
     if phone:
-        # ✅ УСПЕХ: Номер валиден
         await TempDataManager.set(state, "tp_dr_phone", phone)
-
         await message.answer(f"✅ Номер сохранён: {phone}\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):")
-        # Переходим к следующему шагу
         await state.set_state(AddDoctor.waiting_for_bd)
     else:
-        # ❌ ОШИБКА: Формат неверный -> ПОВТОРЯЕМ ВОПРОС
-        await message.answer(
-            "⚠️ <b>Неверный формат номера!</b>\n"
-            "Пожалуйста, введите номер в формате: <code>+77011234567</code>\n"
-            "Или отправьте '<b>-</b>', чтобы пропустить этот шаг."
-        )
-        # ⛔️ ВАЖНО: Мы НЕ меняем состояние и делаем return,
-        # чтобы бот остался ждать ввод номера.
+        await message.answer("⚠️ <b>Неверный формат номера!</b>\nПопробуйте: +77011234567")
         return
 
 
-# Step 4: Birthdate -> Save to DB
 @router.message(AddDoctor.waiting_for_bd)
 async def add_doctor_bd(message: Message, state: FSMContext):
     raw_date = message.text.strip()
-    birthdate = None
 
-    # 1. Проверка: Хочет ли пользователь пропустить?
     if raw_date.lower() in ['нет', '-', 'no', 'не знаю']:
         birthdate = None
-        # Не делаем return, просто идем дальше сохранять с birthdate=None
-
-    # 2. Проверка валидности даты
     else:
-        # validate_date возвращает строку (если ок) или None (если ошибка)
         birthdate = text_utils.validate_date(raw_date)
-
         if not birthdate:
-            # ❌ ОШИБКА: Формат неверный -> ПОВТОРЯЕМ ВОПРОС
-            await message.answer(
-                "⚠️ <b>Неверный формат даты!</b>\n"
-                "Введите дату в формате: <code>ДД.ММ.ГГГГ</code> (например: 25.01.1990)\n"
-                "Или отправьте '<b>Нет</b>', чтобы пропустить."
-            )
-            # ⛔️ Return останавливает функцию, бот остается в том же состоянии
+            await message.answer("⚠️ <b>Неверный формат даты!</b>\nПопробуйте: ДД.ММ.ГГГГ")
             return
 
-    # --- Если мы дошли сюда, значит дата валидна ИЛИ пропущена ---
-
-    # 3. Retrieve all needed data
     try:
         lpu_id, name, spec, phone = await TempDataManager.get_many(
             state, "lpu_id", "tp_dr_name", "tp_dr_spec", "tp_dr_phone"
         )
     except Exception as e:
         logger.error(f"Session data lost: {e}")
-        await message.answer("❌ Данные сессии утеряны. Начните заново.")
+        await message.answer("❌ Данные сессии утеряны.")
         await state.clear()
         return
 
-    # 4. Save to DB
     try:
-        # Save to DB (birthdate will be a string or None)
         await pharmacyDB.add_doc(lpu_id, name, spec, phone, birthdate)
 
-        logger.info(f"✅ Doctor added: {name}, SpecID: {spec}, BD: {birthdate}")
-        await message.answer("✅ <b>Врач успешно добавлен!</b>")
+        keyboard = await get_doctors_inline(state, lpu_id)
+
+        logger.info(f"✅ Doctor added: {name}")
+        await message.answer("✅ <b>Врач успешно добавлен!</b>", reply_markup=keyboard)
 
     except Exception as e:
         logger.critical(f"DB Error adding doctor: {e}")
-        await message.answer("❌ Не удалось сохранить врача в базу данных.")
+        await message.answer("❌ Не удалось сохранить врача.")
 
     finally:
-        # Always clear state at the end of the wizard
-        await state.clear()
+        await state.set_state(PrescriptionFSM.choose_doctor)
