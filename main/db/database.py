@@ -154,11 +154,68 @@ class BotDB:
     # 👨‍⚕️ DOCTORS
     # ============================================================
 
-    async def add_doc(self, lpu_id, doctor_name, spec_id, number, birthdate):
-        await self._execute("""
-            INSERT INTO doctors (lpu_id, doctor, spec_id, numb, birthdate)
-            VALUES (?, ?, ?, ?, ?)
-        """, (lpu_id, doctor_name, spec_id, number, birthdate))
+    # ============================================================
+    # 👨‍⚕️ ADD DOCTOR (With Spec ID Resolution)
+    # ============================================================
+    async def add_doc(self, lpu_id: int, name: str, spec_input: str, phone: str, birthdate: str):
+        """
+        Adds a doctor.
+        Handles 'spec_input' which can be:
+        1. A Main Spec ID (string of digits) -> Resolves to specs.spec_id
+        2. A New Spec Name (text) -> Creates new entry in specs table
+        """
+        self._ensure_conn()
+
+        real_spec_id = None
+
+        # CASE 1: User selected from the list (It's a Main Spec ID)
+        if str(spec_input).isdigit():
+            main_spec_id = int(spec_input)
+
+            # Step A: Check if this Main Spec already exists in 'specs' table
+            row = await self._fetchone("SELECT spec_id FROM specs WHERE ms_id = ?", (main_spec_id,))
+
+            if row:
+                real_spec_id = row['spec_id']
+            else:
+                # Step B: If not, fetch the name from main_specs and create a new entry in specs
+                ms_row = await self._fetchone("SELECT spec FROM main_specs WHERE main_spec_id = ?", (main_spec_id,))
+
+                if ms_row:
+                    spec_name = ms_row['spec']
+                    # Insert into specs to generate a valid spec_id
+                    async with self.conn.execute("INSERT INTO specs (ms_id, spec) VALUES (?, ?)",
+                                                 (main_spec_id, spec_name)) as cursor:
+                        real_spec_id = cursor.lastrowid
+                    await self.conn.commit()
+                else:
+                    raise ValueError(f"Main Spec ID {main_spec_id} not found in DB!")
+
+        # CASE 2: User typed a new specialty manually (Text)
+        else:
+            spec_name = spec_input.strip()
+
+            # Check if this text already exists in 'specs'
+            row = await self._fetchone("SELECT spec_id FROM specs WHERE spec LIKE ?", (spec_name,))
+
+            if row:
+                real_spec_id = row['spec_id']
+            else:
+                # Create completely new spec (No link to main_specs)
+                async with self.conn.execute("INSERT INTO specs (spec, ms_id) VALUES (?, NULL)",
+                                             (spec_name,)) as cursor:
+                    real_spec_id = cursor.lastrowid
+                await self.conn.commit()
+
+        # Final Check
+        if not real_spec_id:
+            raise ValueError("Failed to resolve Specialty ID.")
+
+        # Step 3: Finally Insert the Doctor
+        await self._execute(
+            "INSERT INTO doctors (lpu_id, doctor, spec_id, numb, birthdate) VALUES (?, ?, ?, ?, ?)",
+            (lpu_id, name, real_spec_id, phone, birthdate)
+        )
 
     async def get_doctor_name(self, doc_id: int) -> str:
         """Fetches the full name of the doctor by ID."""
