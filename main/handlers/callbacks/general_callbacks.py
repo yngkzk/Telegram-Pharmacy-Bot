@@ -10,6 +10,7 @@ from states.menu.main_menu_state import MainMenu
 # Импорты базы и утилит
 from loader import accountantDB, pharmacyDB
 from storage.temp_data import TempDataManager
+from loader import reportsDB
 from utils.logger.logger_config import logger
 
 # Импорты клавиатур (Только Inline!)
@@ -127,7 +128,7 @@ async def process_district(callback: types.CallbackQuery, state: FSMContext):
     name = await TempDataManager.get_button_name(state, callback.data) or "Район"
 
     # Сохраняем в TempData
-    key = "a_district" if is_pharmacy else "district"
+    key = "district"
     await TempDataManager.set(state, key, raw_id)
 
     # Следующий шаг: Выбор маршрута
@@ -150,7 +151,7 @@ async def process_road(callback: types.CallbackQuery, state: FSMContext):
     await TempDataManager.set(state, "road", road_num)
 
     # Получаем район, чтобы отфильтровать объекты в БД
-    dist_key = "a_district" if is_pharmacy else "district"
+    dist_key = "district"
     district = await TempDataManager.get(state, dist_key)
 
     msg_text = f"✅ Маршрут: <b>{road_num}</b>\n"
@@ -203,31 +204,50 @@ async def process_lpu(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("doc_"), PrescriptionFSM.choose_doctor)
 async def process_doctor(callback: types.CallbackQuery, state: FSMContext):
     doc_id = callback.data.split("_")[-1]
-    doc_name = await TempDataManager.get_button_name(state, callback.data)
+    doc_name = await pharmacyDB.get_doctor_name(doc_id)
+    user_name = callback.from_user.full_name  # Get current user name
 
     await TempDataManager.set(state, "doc_id", doc_id)
     await TempDataManager.set(state, "doc_name", doc_name)
 
-    # Получаем детали врача (специальность/телефон)
+    # 1. Get Doctor Stats (Existing Logic)
     row = await pharmacyDB.get_doc_stats(int(doc_id))
-
     if row:
         await TempDataManager.set(state, "doc_spec", row["spec"])
         await TempDataManager.set(state, "doc_num", row["numb"])
     else:
         logger.warning(f"Stats not found for doc {doc_id}")
 
-    # Переход к выбору препаратов
+    # ---------------------------------------------------------
+    # 🆕 NEW LOGIC: FETCH & FORMAT PREVIOUS REPORT
+    # ---------------------------------------------------------
+    last_report = await reportsDB.get_last_doctor_report(user_name, doc_name)
+
+    report_text = ""
+    if last_report:
+        # Format the list of drugs
+        preps_str = "\n".join([f"• {p}" for p in last_report['preps']]) if last_report['preps'] else "—"
+
+        report_text = (
+            f"📅 <b>Предыдущий отчёт ({last_report['date']}):</b>\n"
+            f"📝 <b>Условия:</b> {last_report['term']}\n"
+            f"💊 <b>Препараты:</b>\n{preps_str}\n"
+            f"💬 <b>Комментарий:</b> {last_report['commentary']}\n"
+            f"➖➖➖➖➖➖➖➖➖➖\n\n"
+        )
+    # ---------------------------------------------------------
+
+    # Transition to Meds
     await state.set_state(PrescriptionFSM.choose_meds)
 
-    # Важно: устанавливаем префикс для select_handlers
     await TempDataManager.set(state, "prefix", "doc")
-    await TempDataManager.set(state, "selected_items", [])  # Очистка выбора
+    await TempDataManager.set(state, "selected_items", [])
 
     keyboard = await inline_select.get_prep_inline(state, prefix="doc")
 
+    # Show the report text ABOVE the doctor name
     await callback.message.edit_text(
-        f"👨‍⚕️ <b>{doc_name}</b>\n💊 Выберите препараты:",
+        f"{report_text}👨‍⚕️ <b>{doc_name}</b>\n💊 Выберите препараты:",
         reply_markup=keyboard
     )
     await callback.answer()
