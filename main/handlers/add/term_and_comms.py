@@ -15,15 +15,11 @@ router = Router()
 @router.message(PrescriptionFSM.contract_terms, F.text)
 async def process_contract_terms(message: types.Message, state: FSMContext):
     text = message.text.strip()
-
-    # Validation: Don't allow empty or too short text
     if len(text) < 2:
         await message.answer("⚠️ Текст слишком короткий. Напишите подробнее.")
         return
 
     await TempDataManager.set(state, key="term", value=text)
-
-    # Next step: Comments
     await state.set_state(PrescriptionFSM.doctor_comments)
 
     logger.info(f"User {message.from_user.id} set terms: {text}")
@@ -35,15 +31,12 @@ async def process_contract_terms(message: types.Message, state: FSMContext):
 # ============================================================
 @router.message(PrescriptionFSM.waiting_for_quantity, F.text)
 async def process_quantity(message: types.Message, state: FSMContext):
-    # Validation: Must be a number
     if not message.text.isdigit():
         await message.answer("🔢 Пожалуйста, введите <b>целое число</b> (например: 10).")
         return
 
     qty = int(message.text)
     await TempDataManager.set(state, key="quantity", value=qty)
-
-    # Next step: Remaining Stock
     await state.set_state(PrescriptionFSM.waiting_for_remaining)
     await message.answer("📦 <b>Введите остаток</b> (сколько упаковок есть сейчас):")
 
@@ -59,8 +52,6 @@ async def process_remaining(message: types.Message, state: FSMContext):
 
     rem = int(message.text)
     await TempDataManager.set(state, key="remaining", value=rem)
-
-    # Next step: Comments
     await state.set_state(PrescriptionFSM.pharmacy_comments)
     await message.answer("✍️ <b>Напишите комментарий</b> (или отправьте '-', если нет):")
 
@@ -73,13 +64,10 @@ async def process_remaining(message: types.Message, state: FSMContext):
 async def process_comments(message: types.Message, state: FSMContext):
     text = message.text.strip()
 
-    # Handle "Skip" if user sends dash
     if text in ["-", ".", "нет"]:
         text = "Без комментария"
 
     await TempDataManager.set(state, key="comms", value=text)
-
-    # Move to Final Confirmation
     await state.set_state(PrescriptionFSM.confirmation)
 
     # --- GENERATE SUMMARY ---
@@ -88,17 +76,22 @@ async def process_comments(message: types.Message, state: FSMContext):
 
     summary = "📝 <b>Проверьте данные отчёта:</b>\n\n"
 
+    # Dynamic summary generation: Check if keys exist before adding them
     if prefix == "doc":
-        summary += (
-            f"👨‍⚕️ <b>Врач:</b> {data.get('doc_name')}\n"
-            f"📋 <b>Условия:</b> {data.get('term')}\n"
-        )
+        summary += f"👨‍⚕️ <b>Врач:</b> {data.get('doc_name')}\n"
+
+        # Only add terms if they were actually set (not None)
+        if data.get('term'):
+            summary += f"📋 <b>Условия:</b> {data.get('term')}\n"
+
     elif prefix == "apt":
-        summary += (
-            f"🏥 <b>Аптека:</b> {data.get('lpu_name')}\n"
-            f"🔢 <b>Заявка:</b> {data.get('quantity')}\n"
-            f"📦 <b>Остаток:</b> {data.get('remaining')}\n"
-        )
+        summary += f"🏥 <b>Аптека:</b> {data.get('lpu_name')}\n"
+
+        # Only add quantity/remaining if set
+        if data.get('quantity'):
+            summary += f"🔢 <b>Заявка:</b> {data.get('quantity')}\n"
+        if data.get('remaining'):
+            summary += f"📦 <b>Остаток:</b> {data.get('remaining')}\n"
 
     summary += f"💬 <b>Комментарий:</b> {text}\n"
 
