@@ -6,6 +6,7 @@ from handlers.menu import register, main_menu
 from handlers.add import add, select_handlers, term_and_comms
 from handlers.callbacks import general_callbacks
 from handlers.report import report
+from handlers.admin import admin_handlers
 from middlewares.error_handler import setup_error_handler
 
 
@@ -17,6 +18,7 @@ def register_routers():
     dp.include_router(term_and_comms.router)
     dp.include_router(report.router)
     dp.include_router(general_callbacks.router)
+    dp.include_router(admin_handlers.router)
 
 
 async def main():
