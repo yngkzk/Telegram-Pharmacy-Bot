@@ -6,9 +6,9 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 
 from storage.temp_data import TempDataManager
-from keyboard.inline.inline_select import build_multi_select_keyboard
+from keyboard.inline.inline_select import build_multi_select_keyboard, get_prep_inline
 from keyboard.inline.inline_buttons import get_doctors_inline
-from loader import pharmacyDB
+from loader import pharmacyDB, reportsDB
 from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
 
@@ -213,23 +213,95 @@ async def process_quantity_input(message: types.Message, state: FSMContext):
     await ask_next_quantity(message, state)
 
 # ============================================================
-# 📄 PAGINATION HANDLER (Next/Prev Page)
+# 📄 PAGINATION HANDLER (Handles "Next/Back" buttons)
 # ============================================================
 @router.callback_query(F.data.startswith("docpage_"))
 async def paginate_doctors(callback: types.CallbackQuery, state: FSMContext):
-    # Data format: docpage_{lpu_id}_{page_number}
-    parts = callback.data.split("_")
-    lpu_id = int(parts[1])
-    page = int(parts[2])
-
-    # Generate the new keyboard for the requested page
-    keyboard = await get_doctors_inline(state, lpu_id=lpu_id, page=page)
-
-    # Update the message
-    # We use Try/Except to avoid errors if the message content is identical
+    """
+    Switches pages in the doctor list.
+    """
+    # Format: docpage_{lpu_id}_{page_number}
     try:
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
-    except Exception:
-        await callback.answer() # Just answer if nothing changed
+        parts = callback.data.split("_")
+        lpu_id = int(parts[1])
+        page = int(parts[2])
 
+        # Generate the keyboard for the specific page
+        keyboard = await get_doctors_inline(state, lpu_id=lpu_id, page=page)
+
+        # Update the list (Try/Except avoids error if nothing changed)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=keyboard)
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(f"Pagination error: {e}")
+
+    await callback.answer()
+
+
+# ============================================================
+# 👨‍⚕️ DOCTOR SELECTION HANDLER (Handles clicking a Name)
+# ============================================================
+@router.callback_query(F.data.startswith("doc_"), PrescriptionFSM.choose_doctor)
+async def process_doctor(callback: types.CallbackQuery, state: FSMContext):
+    """
+    User clicked a doctor. Shows stats + PREVIOUS REPORT.
+    """
+    # 1. Get Doctor ID & Name
+    doc_id = int(callback.data.split("_")[-1])
+
+    # Fetch clean name from DB (Best practice we discussed)
+    doc_name = await pharmacyDB.get_doctor_name(doc_id)
+    user_name = callback.from_user.full_name
+
+    # Save to state
+    await TempDataManager.set(state, "doc_id", doc_id)
+    await TempDataManager.set(state, "doc_name", doc_name)
+
+    # 2. Get Doctor Stats (Phone/Spec)
+    row = await pharmacyDB.get_doc_stats(doc_id)
+    if row:
+        await TempDataManager.set(state, "doc_spec", row["spec"])
+        await TempDataManager.set(state, "doc_num", row["numb"])
+    else:
+        await TempDataManager.set(state, "doc_spec", "Не указано")
+        await TempDataManager.set(state, "doc_num", None)
+
+    # ---------------------------------------------------------
+    # 📝 RESTORED LOGIC: FETCH PREVIOUS REPORT
+    # ---------------------------------------------------------
+    # Check if we are in 'doc' mode or 'apt' mode (likely doc here)
+    last_report = await reportsDB.get_last_doctor_report(user_name, doc_name)
+
+    report_text = ""
+    if last_report:
+        # Format the medications list
+        preps_str = "\n".join([f"• {p}" for p in last_report['preps']]) if last_report['preps'] else "—"
+
+        report_text = (
+            f"📅 <b>Предыдущий отчёт ({last_report['date']}):</b>\n"
+            f"📝 <b>Условия:</b> {last_report['term']}\n"
+            f"💊 <b>Препараты:</b>\n{preps_str}\n"
+            f"💬 <b>Комментарий:</b> {last_report['commentary']}\n"
+            f"➖➖➖➖➖➖➖➖➖➖\n\n"
+        )
+    # ---------------------------------------------------------
+
+    # 3. Transition to Choosing Meds
+    await state.set_state(PrescriptionFSM.choose_meds)
+
+    # Setup state for the next step
+    await TempDataManager.set(state, "prefix", "doc")
+    await TempDataManager.set(state, "selected_items", [])
+
+    # Get Medication Keyboard
+    keyboard = await get_prep_inline(state, prefix="doc")
+
+    # 4. Display Message (WITH report_text)
+    await callback.message.edit_text(
+        f"{report_text}👨‍⚕️ <b>{doc_name}</b>\n💊 Выберите препараты:",
+        reply_markup=keyboard
+    )
     await callback.answer()
