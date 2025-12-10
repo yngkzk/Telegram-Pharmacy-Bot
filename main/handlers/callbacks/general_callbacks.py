@@ -14,7 +14,7 @@ from loader import reportsDB
 from utils.logger.logger_config import logger
 
 # Импорты клавиатур (Только Inline!)
-from keyboard.inline import inline_buttons, inline_select, menu_kb
+from keyboard.inline import inline_buttons, inline_select, menu_kb, admin_kb
 
 router = Router()
 
@@ -76,6 +76,16 @@ async def on_feedback_menu(callback: types.CallbackQuery):
         reply_markup=menu_kb.get_main_menu_inline()  # Вернуться в меню
     )
     await callback.answer()
+
+@router.callback_query(F.data == "admin_panel")
+async def on_admin_panel(callback: types.CallbackQuery):
+    """Нажата кнопка 'Админка'"""
+    # Админ панель
+    keyboard = admin_kb.get_admin_menu()
+    await callback.message.edit_text(
+        "⚙️ <b>Админ панель</b>\nВыберите действие:",
+        reply_markup=keyboard
+    )
 
 
 @router.callback_query(F.data == "user_log_out")
