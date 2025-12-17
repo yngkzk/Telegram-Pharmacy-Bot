@@ -10,6 +10,10 @@ class PrescriptionFSM(StatesGroup):
 
     choose_meds = State()  # Мульти-выбор препаратов (Checkboxes)
 
+    # 🆕 NEW STATES FOR PHARMACY INPUTS
+    waiting_for_req_qty = State()  # Waiting for "Заявка"
+    waiting_for_rem_qty = State()  # Waiting for "Остаток"
+
     # ==========================================
     # 👨‍⚕️ Ветка: Визит к Врачу (Doctor Flow)
     # ==========================================
