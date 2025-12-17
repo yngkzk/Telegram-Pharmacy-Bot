@@ -279,3 +279,10 @@ class BotDB:
         # ⚠️ CHECK TABLE NAME: Assuming 'districts' and column 'name'
         res = await self._fetchone("SELECT name FROM districts WHERE id = ?", (district_id,))
         return res["name"] if res else "Unknown"
+
+    async def get_road_name(self, road_id: int) -> str:
+        """Returns the road name/number (e.g., 'Маршрут 5')."""
+        self._ensure_conn()
+        res = await self._fetchone("SELECT road_num FROM roads WHERE road_id = ?", (road_id,))
+        # Since 'roads' table only has 'road_num', we format it nicely
+        return f"Маршрут {res['road_num']}" if res else "Unknown Road"
