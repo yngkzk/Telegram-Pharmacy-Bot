@@ -125,6 +125,15 @@ class BotDB:
             ORDER BY l.pharmacy_name
         """, (district, road))
 
+    async def get_road_id_by_number(self, district_id: int, road_num: int) -> int:
+        """Finds the unique road_id based on district and road number."""
+        self._ensure_conn()
+        row = await self._fetchone(
+            "SELECT road_id FROM roads WHERE district_name = ? AND road_num = ?",
+            (district_id, road_num)
+        )
+        return row['road_id'] if row else None
+
     # ============================================================
     # 💊 APOTHECARY
     # ============================================================
@@ -149,10 +158,6 @@ class BotDB:
             WHERE r.district_name = ? AND r.road_num = ?
             ORDER BY a.id
         """, (district, road))
-
-    # ============================================================
-    # 👨‍⚕️ DOCTORS
-    # ============================================================
 
     # ============================================================
     # 👨‍⚕️ ADD DOCTOR (With Spec ID Resolution)

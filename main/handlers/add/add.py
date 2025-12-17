@@ -104,8 +104,12 @@ async def add_lpu_url(message: Message, state: FSMContext):
     url = message.text.strip()
 
     try:
-        # Retrieve Road ID from state (saved during selection)
-        name, district, road_id = await TempDataManager.get_many(state, "lpu_name", "district", "road")
+        # 1. Retrieve the raw data (district ID and road NUMBER)
+        # Note: We retrieve "road" (the number 1-7), not the ID yet.
+        name = await TempDataManager.get(state, "lpu_name")
+        district_id = await TempDataManager.get(state, "district")
+        road_num = await TempDataManager.get(state, "road")
+
     except Exception as e:
         logger.error(f"State data missing: {e}")
         await message.answer("❌ Ошибка данных. Попробуйте начать заново.")
@@ -113,10 +117,23 @@ async def add_lpu_url(message: Message, state: FSMContext):
         return
 
     try:
-        await pharmacyDB.add_lpu(road_id, name, url)
-        logger.info(f"✅ Added LPU: {name} (Road ID: {road_id})")
+        # 2. LOOKUP: Find the correct database ID for this road
+        real_road_id = await pharmacyDB.get_road_id_by_number(district_id, road_num)
 
-        keyboard = await get_lpu_inline(state, district, road_id)
+        if not real_road_id:
+            await message.answer(f"❌ Ошибка: Маршрут {road_num} в районе {district_id} не найден в базе.")
+            return
+
+        # 3. Save using the REAL ID
+        await pharmacyDB.add_lpu(real_road_id, name, url)
+        logger.info(f"✅ Added LPU: {name} (Road Number: {road_num} -> ID: {real_road_id})")
+
+        # 4. Success
+        # Note: get_lpu_inline likely needs the district_id and road_num (or id depending on your implementation)
+        # If get_lpu_inline uses the ID, pass real_road_id. If it uses the number, pass road_num.
+        # Based on your previous code, it likely expects the ID for querying:
+        keyboard = await get_lpu_inline(state, district_id, real_road_id)
+
         await message.answer(f"✅ ЛПУ <b>{name}</b> успешно добавлено!", reply_markup=keyboard)
 
     except Exception as e:
@@ -125,6 +142,8 @@ async def add_lpu_url(message: Message, state: FSMContext):
 
     finally:
         await state.set_state(PrescriptionFSM.choose_lpu)
+
+
 
 
 # ============================================================
@@ -150,10 +169,11 @@ async def add_apt_url(message: Message, state: FSMContext):
     url = message.text.strip()
 
     try:
-        # We need the ROAD_ID to save the pharmacy to the correct location
+        # 1. Retrieve Data
+        # 'road' usually holds the NUMBER (1-7), not the DB ID
         name = await TempDataManager.get(state, "apt_name")
-        road_id = await TempDataManager.get(state, "road")  # Ensure 'road' key holds the ID
-        district = await TempDataManager.get(state, "district")
+        district_id = await TempDataManager.get(state, "district")
+        road_num = await TempDataManager.get(state, "road")
     except Exception as e:
         logger.error(f"Session data lost: {e}")
         await message.answer("❌ Данные сессии утеряны.")
@@ -161,18 +181,22 @@ async def add_apt_url(message: Message, state: FSMContext):
         return
 
     try:
-        # ⚠️ You need to add this method to your pharmacyDB class:
-        # INSERT INTO apothecary (road_id, name, url) VALUES (?, ?, ?)
-        await pharmacyDB.add_apothecary_place(road_id, name, url)
+        # 2. LOOKUP: Resolve the Real Road ID
+        # (Using the method we added to pharmacyDB earlier)
+        real_road_id = await pharmacyDB.get_road_id_by_number(district_id, road_num)
 
-        # Refresh list (Assuming you have a get_apothecary_inline or similar)
-        # If not, redirect to main menu or generic list
-        keyboard = await get_apothecary_inline(state, district, road_id)
+        if not real_road_id:
+            await message.answer(f"❌ Ошибка: Маршрут {road_num} в районе {district_id} не найден в базе.")
+            return
+
+        # 3. Save using the REAL ID
+        await pharmacyDB.add_apothecary_place(real_road_id, name, url)
+
+        # 4. Refresh List
+        # Ensure get_apothecary_inline uses the real_road_id
+        keyboard = await get_apothecary_inline(state, district_id, road_num)
+
         await message.answer(f"✅ Аптека <b>{name}</b> успешно добавлена!", reply_markup=keyboard)
-
-        # Optional: Show list if you have a keyboard generator for apothecaries
-        # keyboard = await get_lpu_inline(state, district, road_id, type="apt")
-        # await message.answer("Список обновлен:", reply_markup=keyboard)
 
     except Exception as e:
         logger.critical(f"DB Error adding Apothecary: {e}")
