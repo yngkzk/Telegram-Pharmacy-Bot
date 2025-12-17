@@ -164,26 +164,22 @@ class ReportRepository:
     # ============================================================
     # 5. (NEW) SAVE PHARMACY ITEMS (DETAILS)
     # ============================================================
-    async def save_apothecary_preps(self, report_id: int, items: List[tuple]) -> None:
+    async def save_apothecary_preps(self, report_id: int, items: list) -> None:
         """
-        Saves the list of medications with quantities.
-
-        :param report_id: ID of the main report
-        :param items: A list of tuples: [("MedName", "Quantity"), ("MedName2", "Qty")]
+        Saves items with separate Request and Remaining values.
+        items: List of tuples -> [(PrepName, RequestQty, RemainingQty), ...]
         """
         self._ensure_conn()
-
         if not items:
             return
 
-        # Prepare data for executemany
-        # We ensure the structure matches: (report_id, prep_name, remaining/quantity)
-        data = [(report_id, name, str(qty)) for name, qty in items]
+        # Prepare data: (report_id, prep, request, remaining)
+        data = [(report_id, name, str(req), str(rem)) for name, req, rem in items]
 
         await self.conn.executemany(
             '''
-            INSERT INTO apothecary_detailed_report (report_id, prep, remaining)
-            VALUES (?, ?, ?)
+            INSERT INTO apothecary_detailed_report (report_id, prep, request, remaining)
+            VALUES (?, ?, ?, ?)
             ''',
             data
         )
@@ -247,14 +243,14 @@ class ReportRepository:
             return [dict(row) for row in rows]
 
     async def fetch_all_apothecary_data(self):
-        """Fetches joined Pharmacy reports + Items"""
         self._ensure_conn()
-        # Note: 'apothecary' column in DB acts as LPU name
         query = """
             SELECT 
                 a.id, a.date, a.user, a.district, a.road, a.apothecary as lpu_name, 
                 a.commentary,
-                ad.prep, ad.remaining
+                ad.prep, 
+                ad.request,   -- NEW COLUMN
+                ad.remaining  -- EXISTING COLUMN
             FROM apothecary_report a
             LEFT JOIN apothecary_detailed_report ad ON a.id = ad.report_id
             ORDER BY a.date DESC
@@ -262,3 +258,50 @@ class ReportRepository:
         async with self.conn.execute(query) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    # ============================================================
+    # 🔍 GET LAST APOTHECARY REPORT
+    # ============================================================
+    async def get_last_apothecary_report(self, user: str, lpu_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetches the most recent report for a specific Pharmacy by the current user.
+        """
+        self._ensure_conn()
+
+        # 1. Find the latest report ID
+        # Note: In apothecary_report, the column for the place name is 'apothecary'
+        query = '''
+            SELECT id, date, commentary 
+            FROM apothecary_report 
+            WHERE user = ? AND apothecary = ? 
+            ORDER BY date DESC 
+            LIMIT 1
+        '''
+
+        async with self.conn.execute(query, (user, lpu_name)) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        report_id = row["id"]
+
+        # 2. Get the items
+        # We fetch prep, request, and remaining
+        sql = "SELECT prep, request, remaining FROM apothecary_detailed_report WHERE report_id = ?"
+
+        async with self.conn.execute(sql, (report_id,)) as cursor:
+            rows = await cursor.fetchall()
+
+            # Format nicely for display: "Aspirin (Req: 10 / Rem: 5)"
+            items = []
+            for r in rows:
+                req = r['request'] if r['request'] else "0"
+                rem = r['remaining'] if r['remaining'] else "0"
+                items.append(f"{r['prep']} (Заявка: {req} / Остаток: {rem})")
+
+        return {
+            "date": row["date"],
+            "commentary": row["commentary"],
+            "items": items
+        }
