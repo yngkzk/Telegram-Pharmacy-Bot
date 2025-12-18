@@ -218,7 +218,8 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
         # =====================================================
 
         await callback.message.edit_text(success_text)
-        await callback.message.answer("Что делаем дальше?", reply_markup=get_main_menu_inline())
+        kb = await get_main_menu_inline(callback.from_user.id)
+        await callback.message.answer("Что делаем дальше?", reply_markup=kb)
         await state.clear()
 
     except Exception as e:
