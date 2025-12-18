@@ -71,9 +71,10 @@ async def on_report_menu(callback: types.CallbackQuery):
 async def on_feedback_menu(callback: types.CallbackQuery):
     """Нажата кнопка 'Отзывы'"""
     # Заглушка или меню отзывов
+    kb = await get_main_menu_inline(callback.from_user.id)
     await callback.message.edit_text(
         "✍️ <b>Раздел отзывов</b>\nФункционал в разработке.",
-        reply_markup=menu_kb.get_main_menu_inline()  # Вернуться в меню
+        reply_markup=kb  # Вернуться в меню
     )
     await callback.answer()
 
@@ -115,10 +116,10 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     """Возвращает пользователя в главное меню из любого раздела"""
     await state.clear()  # Сбрасываем выбор (район, врач и т.д.)
     await state.set_state(MainMenu.logged_in)
-
+    kb = await menu_kb.get_main_menu_inline(callback.from_user.id)
     await callback.message.edit_text(
         "🔙 <b>Главное меню</b>\nВыберите раздел:",
-        reply_markup=menu_kb.get_main_menu_inline()
+        reply_markup=kb
     )
     await callback.answer()
 
