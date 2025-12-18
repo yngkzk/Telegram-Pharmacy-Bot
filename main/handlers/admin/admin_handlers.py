@@ -1,6 +1,8 @@
 from aiogram import Router, F, types
 from aiogram.types import BufferedInputFile
 from datetime import datetime
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
 
 # Import your database and the Excel generator we created earlier
 from loader import reportsDB
@@ -8,6 +10,29 @@ from utils.report.excel_generator import create_excel_report
 from keyboard.inline.admin_kb import get_admin_menu
 
 router = Router()
+
+
+class AdminTaskFSM(StatesGroup):
+    waiting_for_task_text = State()
+
+
+# 1. Кнопка в админке "Создать задачу"
+@router.callback_query(F.data == "admin_create_task")
+async def admin_start_task(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("✍️ Введите текст новой задачи для всех сотрудников:")
+    await state.set_state(AdminTaskFSM.waiting_for_task_text)
+    await callback.answer()
+
+# 2. Сохранение
+@router.message(AdminTaskFSM.waiting_for_task_text)
+async def admin_save_task(message: types.Message, state: FSMContext):
+    text = message.text
+
+    # Сохраняем в БД
+    await reportsDB.add_task(text)
+
+    await message.answer(f"✅ Задача опубликована:\n\n<i>{text}</i>")
+    await state.clear()
 
 # ============================================================
 # 📊 ADMIN: EXPORT EXCEL
