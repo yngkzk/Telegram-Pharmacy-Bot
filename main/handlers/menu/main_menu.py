@@ -32,11 +32,11 @@ async def start_command(message: types.Message, state: FSMContext):
     if active_username:
         # ✅ CASE: User is Logged In
         await state.set_state(MainMenu.logged_in)
-
+        kb = await get_main_menu_inline(user_id)
         await message.answer(
             f"👋 С возвращением, <b>{active_username}</b>!\n\n"
             "Выберите раздел в меню ниже:",
-            reply_markup=get_main_menu_inline()
+            reply_markup=kb
         )
     else:
         # 👤 CASE: Guest / Not Logged In
