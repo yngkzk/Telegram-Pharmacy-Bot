@@ -305,3 +305,46 @@ class ReportRepository:
             "commentary": row["commentary"],
             "items": items
         }
+
+    # ============================================================
+    # 📋 ЗАДАЧИ (TASKS)
+    # ============================================================
+
+    async def add_task(self, text: str):
+        """Админ добавляет задачу"""
+        self._ensure_conn()
+        await self.conn.execute("INSERT INTO tasks (text) VALUES (?)", (text,))
+        await self.conn.commit()
+
+    async def get_active_tasks(self):
+        """Получить все активные задачи"""
+        self._ensure_conn()
+        async with self.conn.execute("SELECT id, text FROM tasks WHERE is_active = 1 ORDER BY id DESC") as cursor:
+            return await cursor.fetchall()
+
+    async def get_unread_count(self, user_id: int) -> int:
+        """Считает, сколько задач пользователь еще НЕ открывал"""
+        self._ensure_conn()
+        # Логика: Берем активные задачи, которых НЕТ в таблице просмотров для этого юзера
+        query = """
+            SELECT COUNT(*) 
+            FROM tasks 
+            WHERE is_active = 1 
+            AND id NOT IN (SELECT task_id FROM task_views WHERE user_id = ?)
+        """
+        async with self.conn.execute(query, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def mark_all_as_read(self, user_id: int):
+        """Отмечает все текущие активные задачи как прочитанные"""
+        self._ensure_conn()
+        # Получаем ID всех активных задач
+        tasks = await self.get_active_tasks()
+        if not tasks:
+            return
+
+        # Записываем просмотры (игнорируем дубликаты благодаря INSERT OR IGNORE)
+        data = [(user_id, task['id']) for task in tasks]
+        await self.conn.executemany("INSERT OR IGNORE INTO task_views (user_id, task_id) VALUES (?, ?)", data)
+        await self.conn.commit()
