@@ -210,10 +210,12 @@ async def confirm_password(message: types.Message, state: FSMContext):
         # Сразу логиним пользователя
         await accountantDB.set_logged_in(user_id, user_name, 1)
 
+        kb = await get_main_menu_inline(user_id)
+
         await state.set_state(MainMenu.logged_in)
         await message.answer(
             f"✅ Регистрация успешна!\nВы вошли как <b>{user_name}</b>.",
-            reply_markup=get_main_menu_inline()
+            reply_markup=kb
         )
 
     except Exception as e:
