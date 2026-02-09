@@ -119,11 +119,11 @@ async def check_password(message: types.Message, state: FSMContext):
     if await accountantDB.check_password(username, password):
         # ✅ УСПЕХ
         await accountantDB.set_logged_in(user_id, username, 1)
-
+        kb = await get_main_menu_inline(user_id)
         await state.set_state(MainMenu.logged_in)
         await message.answer(
             f"✅ Добро пожаловать, <b>{username}</b>!",
-            reply_markup=get_main_menu_inline()
+            reply_markup=kb
         )
     else:
         # ❌ ОШИБКА
@@ -210,13 +210,25 @@ async def confirm_password(message: types.Message, state: FSMContext):
         # Сразу логиним пользователя
         await accountantDB.set_logged_in(user_id, user_name, 1)
 
-        kb = await get_main_menu_inline(user_id)
+        # kb = await get_main_menu_inline(user_id)
+        #
+        # await state.set_state(MainMenu.logged_in)
+        # await message.answer(
+        #     f"✅ Регистрация успешна!\nВы вошли как <b>{user_name}</b>.",
+        #     reply_markup=kb
+        # )
 
-        await state.set_state(MainMenu.logged_in)
         await message.answer(
-            f"✅ Регистрация успешна!\nВы вошли как <b>{user_name}</b>.",
-            reply_markup=kb
+            "✅ <b>Заявка отправлена!</b>\n\n"
+            "Ваш аккаунт находится на проверке у администратора.\n"
+            "Как только вам дадут доступ, бот пришлет уведомление."
         )
+
+        # ОПЦИОНАЛЬНО: Уведомить админов сразу
+        # for admin_id in ADMIN_IDS:
+        #     await bot.send_message(admin_id, f"🔔 Новая регистрация: {name} ({phone})")
+
+        await state.clear()
 
     except Exception as e:
         await message.answer(f"❌ Ошибка при регистрации: {e}")

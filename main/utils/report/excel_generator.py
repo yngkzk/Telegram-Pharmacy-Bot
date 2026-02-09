@@ -66,7 +66,7 @@ def create_excel_report(doc_data: list, apt_data: list) -> BytesIO:
             ]
             agg_rules = {col: 'first' for col in static_cols if col in df.columns}
             df_grouped = df.groupby('id').agg(agg_rules)
-
+            
             # Combine Preps
             df_grouped['prep'] = df.groupby('id')['prep'].apply(
                 lambda x: '\n'.join([str(s) for s in x if s])

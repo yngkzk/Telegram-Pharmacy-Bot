@@ -73,7 +73,7 @@ class BotDB:
         return row["user_name"] if row else None
 
     async def get_user_list(self) -> List[str]:
-        rows = await self._fetchall("SELECT user_name FROM users")
+        rows = await self._fetchall(f"SELECT user_name FROM users WHERE is_approved = 1")
         return [row["user_name"] for row in rows]
 
     async def add_user(self, user_id: int, user_name: str, user_password: str, region: str):
@@ -286,3 +286,44 @@ class BotDB:
         res = await self._fetchone("SELECT road_num FROM roads WHERE road_id = ?", (road_id,))
         # Since 'roads' table only has 'road_num', we format it nicely
         return f"Маршрут {res['road_num']}" if res else "Unknown Road"
+
+    # ============================================================
+    # 👤 УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (MODERATION)
+    # ============================================================
+
+    async def get_pending_users(self):
+        """Возвращает список пользователей, ожидающих подтверждения"""
+        self._ensure_conn()
+        # Выбираем тех, у кого is_approved = 0
+        async with self.conn.execute("SELECT user_id, user_name, region FROM users WHERE is_approved = 0") as cursor:
+            return await cursor.fetchall()
+
+    async def approve_user(self, user_id: int):
+        """Дает доступ пользователю"""
+        self._ensure_conn()
+        await self.conn.execute("UPDATE users SET is_approved = 1 WHERE user_id = ?", (user_id,))
+        await self.conn.commit()
+
+    async def delete_user(self, user_id: int):
+        """Удаляет пользователя (отклонение заявки)"""
+        self._ensure_conn()
+        await self.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        await self.conn.commit()
+
+    async def is_user_approved(self, user_id: int):
+        """
+        Возвращает:
+        True  - (1) Пользователь есть и одобрен
+        False - (0) Пользователь есть, но ждет (is_approved = 0)
+        None  - Пользователя вообще нет в таблице
+        """
+        self._ensure_conn()
+        async with self.conn.execute("SELECT is_approved FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+            # 🔥 ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ:
+            if row is None:
+                return None  # Пользователя нет -> Сценарий 3
+
+            # Если пользователь есть, превращаем 1 в True, 0 в False
+            return bool(row[0])
