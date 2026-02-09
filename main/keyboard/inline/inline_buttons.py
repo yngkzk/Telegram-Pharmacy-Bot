@@ -2,98 +2,89 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from loader import pharmacyDB
+# Импортируем только класс для подсказки типов
+from db.database import BotDB
+
 from utils.text.text_utils import shorten_name
-from utils.logger.logger_config import logger
 from storage.temp_data import TempDataManager
 
+# Константы
+PAGE_SIZE = 10
+
 
 # ================================================================
-# 🔥 CORE BUILDER (The "Engine")
+# 🔥 УНИВЕРСАЛЬНЫЙ СТРОИТЕЛЬ (Helper)
 # ================================================================
-async def build_shortcut_keyboard(
+async def build_keyboard_from_items(
         items: list,
         prefix: str,
         state: FSMContext = None,
-        row_width: int = 2,
-        text_field: int = 1,
-        id_field: int = 0,
-        add_back: bool = True,  # Default to True
-        add_button: bool = False
+        row_width: int = 1,
+        add_back_btn: bool = True,
+        add_new_btn_callback: str = None
 ) -> InlineKeyboardMarkup:
     """
-    Generates an inline keyboard from a list of DB items.
-    Auto-saves button text to TempData for retrieval later.
+    Строит клавиатуру из списка объектов (dict или aiosqlite.Row).
     """
     builder = InlineKeyboardBuilder()
 
-    for i, item in enumerate(items, start=1):
-        # 1. Normalize Item Data
-        if isinstance(item, (int, str)):
-            item_id = str(item)
-            full_text = str(item)
-            url = None
-        elif isinstance(item, dict):  # For dict-like rows
-            item_id = str(item.get("id") or item.get("pk") or i)
-            full_text = str(item.get("name") or item.get("text") or item_id)
-            url = item.get("url")
-        else:  # For tuples/lists (sqlite rows)
-            try:
-                # Try accessing by key (aiosqlite.Row)
-                item_id = str(item["id"]) if "id" in item.keys() else str(item[id_field])
-                full_text = str(item["name"]) if "name" in item.keys() else str(item[text_field])
-                # Check for specific fields for URL
-                url = item["url"] if "url" in item.keys() else None
-                if not url and "pharmacy_url" in item.keys(): url = item["pharmacy_url"]
-            except (IndexError, TypeError, AttributeError):
-                # Fallback for plain tuples
-                item_id = str(item[id_field])
-                full_text = str(item[text_field])
-                url = item[2] if len(item) > 2 else None
+    for item in items:
+        # Пытаемся достать ID и Name универсально
+        try:
+            # Если это aiosqlite.Row или dict
+            item_id = item['id']
+            # Пробуем разные ключи для имени
+            if 'name' in item.keys():
+                text = item['name']
+            elif 'pharmacy_name' in item.keys():
+                text = item['pharmacy_name']
+            elif 'doctor' in item.keys():
+                text = item['doctor']
+            elif 'spec' in item.keys():
+                text = item['spec']
+            elif 'prep' in item.keys():  # Для препаратов
+                text = item['prep']
+            else:
+                text = str(item_id)  # Fallback
 
+            # Если есть URL, сохраняем его в TempData (если передан state)
+            if state and 'url' in item.keys() and item['url']:
+                await TempDataManager.set(state, f"url_{prefix}_{item_id}", item['url'])
+
+        except (TypeError, IndexError, AttributeError):
+            # Если это просто строка или число (например, road_num)
+            item_id = str(item)
+            text = str(item)
+
+        # Формируем callback
         callback_data = f"{prefix}_{item_id}"
 
-        # 2. Save Metadata (URL & Text)
-        if state:
-            if url:
-                await TempDataManager.save_extra(state, callback_data, url=url)
-            # Save original text (e.g., full doctor name)
-            await TempDataManager.save_button(state, callback_data, full_text)
-
-        # 3. Format Display Text
-        # Shorten only if it's a doctor (long names break buttons)
-        display_text = shorten_name(full_text) if prefix == "doc" else full_text
+        # Обрезаем длинные имена для красоты
+        display_text = shorten_name(text) if len(text) > 30 else text
 
         builder.button(text=display_text, callback_data=callback_data)
 
-    # Apply grid layout
     builder.adjust(row_width)
 
-    # 4. Footer Buttons
+    # --- КНОПКИ УПРАВЛЕНИЯ ---
     footer_row = []
 
-    if add_button:
-        # "Add New" button (e.g. Add Doctor)
-        footer_row.append(InlineKeyboardButton(text="➕ Добавить", callback_data=f"add_{prefix}"))
+    if add_new_btn_callback:
+        footer_row.append(InlineKeyboardButton(text="➕ Добавить", callback_data=add_new_btn_callback))
 
-    if add_back:
-        # Universal Back Button -> Main Menu
+    if add_back_btn:
         footer_row.append(InlineKeyboardButton(text="⬅️ В меню", callback_data="back_to_main"))
 
     if footer_row:
-        builder.row(*footer_row)  # Add footer as a separate row
+        builder.row(*footer_row)
 
     return builder.as_markup()
 
 
 # ================================================================
-# === STATIC MENUS (Simple actions)
+# === СТАТИЧНЫЕ МЕНЮ (Без базы данных)
 # ================================================================
 def get_confirm_inline(mode=False) -> InlineKeyboardMarkup:
-    """
-    mode=False: Yes/No (Confirm Action)
-    mode=True:  View/Upload (Confirm Report)
-    """
     builder = InlineKeyboardBuilder()
     if mode:
         builder.button(text="📖 Посмотреть", callback_data="show_card")
@@ -101,7 +92,6 @@ def get_confirm_inline(mode=False) -> InlineKeyboardMarkup:
     else:
         builder.button(text="✅ Да", callback_data="confirm_yes")
         builder.button(text="❌ Нет", callback_data="confirm_no")
-
     builder.adjust(2)
     return builder.as_markup()
 
@@ -112,107 +102,95 @@ def get_cancel_inline() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_reports_inline() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📊 Продажи", callback_data="report_sales")
-    builder.button(text="💰 Доходы", callback_data="report_income")
-    builder.button(text="🧾 Все отчёты", callback_data="report_all")
-    builder.button(text="⬅️ Назад", callback_data="back_to_main")
-    builder.adjust(2, 1)
-    return builder.as_markup()
-
-
 # ================================================================
-# === DYNAMIC DB MENUS (Async)
+# === ДИНАМИЧЕСКИЕ МЕНЮ (С запросами к БД)
 # ================================================================
-async def get_district_inline(state, mode: str) -> InlineKeyboardMarkup:
-    # mode = "district" (Doctor) or "a_district" (Pharmacy)
-    items = await pharmacyDB.get_district_list()
-    # Assuming DB returns [{"id": 1, "name": "Almaly"}, ...]
-    return await build_shortcut_keyboard(items, state=state, prefix=mode, add_back=True)
+
+# ⚠️ ВЕЗДЕ ДОБАВЛЯЕМ pharmacy_db В АРГУМЕНТЫ
+
+async def get_district_inline(pharmacy_db: BotDB, state: FSMContext, mode: str) -> InlineKeyboardMarkup:
+    # mode = "district" (Врачи) or "a_district" (Аптеки)
+    items = await pharmacy_db.get_district_list()
+    return await build_keyboard_from_items(items, prefix=mode, state=state, row_width=2)
 
 
-async def get_road_inline(state, mode: str) -> InlineKeyboardMarkup:
+async def get_road_inline(pharmacy_db: BotDB, state: FSMContext, mode: str) -> InlineKeyboardMarkup:
     # mode = "road" or "a_road"
-    items = await pharmacyDB.get_road_list()
-    # List of simple integers/strings [1, 2, 3]
-    return await build_shortcut_keyboard(items, state=state, prefix=mode, add_back=True)
+    # get_road_list возвращает просто список чисел [1, 2, 3]
+    items = await pharmacy_db.get_road_list()
+    return await build_keyboard_from_items(items, prefix=mode, state=state, row_width=3)
 
 
-async def get_lpu_inline(state, district, road) -> InlineKeyboardMarkup:
-    items = await pharmacyDB.get_lpu_list(district, road)
-    # Prefix "lpu" -> callback "lpu_5"
-    return await build_shortcut_keyboard(items, state=state, prefix="lpu", add_back=True, add_button=True)
+async def get_lpu_inline(pharmacy_db: BotDB, state: FSMContext, district, road) -> InlineKeyboardMarkup:
+    # district - это имя района (строка), road - номер маршрута (int)
+    items = await pharmacy_db.get_lpu_list(district, road)
+    # Здесь prefix="lpu", кнопки будут lpu_123
+    return await build_keyboard_from_items(
+        items,
+        prefix="lpu",
+        state=state,
+        row_width=1,
+        add_new_btn_callback="add_lpu"  # Кнопка "Добавить"
+    )
 
 
-async def get_apothecary_inline(state, district, road) -> InlineKeyboardMarkup:
-    items = await pharmacyDB.get_apothecary_list(district, road)
-    # Prefix "apothecary" -> callback "apothecary_5"
-    return await build_shortcut_keyboard(items, state=state, prefix="apothecary", row_width=2,
-                                         add_back=True, add_button=True)
+async def get_apothecary_inline(pharmacy_db: BotDB, state: FSMContext, district, road) -> InlineKeyboardMarkup:
+    items = await pharmacy_db.get_apothecary_list(district, road)
+    return await build_keyboard_from_items(
+        items,
+        prefix="apothecary",
+        state=state,
+        row_width=1,
+        add_new_btn_callback="add_apothecary"
+    )
 
 
-async def get_spec_inline(state=None) -> InlineKeyboardMarkup:
-    # Used for adding new doctors
-    items = await pharmacyDB.get_spec_list()
-    return await build_shortcut_keyboard(items, state=state, prefix="main_spec",
-                                         add_back=False)  # No back needed here usually
+async def get_spec_inline(pharmacy_db: BotDB, state: FSMContext = None) -> InlineKeyboardMarkup:
+    items = await pharmacy_db.get_spec_list()
+    # prefix="main_spec" -> main_spec_5
+    return await build_keyboard_from_items(items, prefix="main_spec", state=state, row_width=2)
 
 
-# Constants
-PAGE_SIZE = 10  # How many doctors to show per page
-
-
-async def get_doctors_inline(state, lpu_id: int, page: int = 1) -> InlineKeyboardMarkup:
+async def get_doctors_inline(
+        pharmacy_db: BotDB,
+        state: FSMContext,
+        lpu_id: int,
+        page: int = 1
+) -> InlineKeyboardMarkup:
     """
-    Generates a keyboard with doctors, supporting pagination.
+    Генерирует список врачей с пагинацией.
     """
-    # 1. Get ALL doctors for this LPU
-    # (Assuming pharmacyDB.get_doctors returns a list of dicts/rows)
-    all_doctors = await pharmacyDB.get_doctors(lpu_id)
+    # 1. Получаем ВСЕХ врачей
+    all_doctors = await pharmacy_db.get_doctors(lpu_id)
 
-    # 2. Slice the list for the current page
+    # 2. Пагинация (срез)
     start_index = (page - 1) * PAGE_SIZE
     end_index = start_index + PAGE_SIZE
     current_doctors = all_doctors[start_index:end_index]
 
     builder = InlineKeyboardBuilder()
 
-    # 3. Add Doctor Buttons
+    # 3. Кнопки врачей
     for doc in current_doctors:
-        # Assuming your row has 'id' and 'name' (or 'doctor')
-        # Adjust key names matches your DB row
         d_name = doc['doctor']
         d_id = doc['id']
-
         builder.button(text=f"👨‍⚕️ {d_name}", callback_data=f"doc_{d_id}")
 
-    # Layout: 1 column of doctors
     builder.adjust(1)
 
-    # 4. Navigation Buttons (Next / Back)
+    # 4. Навигация
     nav_buttons = []
-
-    # "Back" button if not on the first page
     if page > 1:
-        nav_buttons.append(
-            InlineKeyboardButton(text="⬅️ Назад", callback_data=f"docpage_{lpu_id}_{page - 1}")
-        )
-
-    # "Next" button if there are more doctors
+        nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"docpage_{lpu_id}_{page - 1}"))
     if end_index < len(all_doctors):
-        nav_buttons.append(
-            InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"docpage_{lpu_id}_{page + 1}")
-        )
+        nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"docpage_{lpu_id}_{page + 1}"))
 
-    # 5. "Add New" button (e.g. Add Doctor)
-    nav_buttons.append(InlineKeyboardButton(text="➕ Добавить", callback_data="add_doc"))
-
-    # Add navigation row
+    # Добавляем ряд навигации
     if nav_buttons:
         builder.row(*nav_buttons)
 
-    # 6. "Back to LPU List" or Main Menu
+    # 5. Кнопка "Добавить врача" и "Назад"
+    builder.row(InlineKeyboardButton(text="➕ Добавить врача", callback_data="add_doc"))
     builder.row(InlineKeyboardButton(text="🔙 Меню", callback_data="back_to_main"))
 
     return builder.as_markup()

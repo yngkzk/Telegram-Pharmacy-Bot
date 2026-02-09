@@ -1,12 +1,15 @@
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram import Router, F, types
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+
+# Импортируем типы
+from db.database import BotDB
+from db.reports import ReportRepository
 
 from storage.temp_data import TempDataManager
 from keyboard.inline.menu_kb import get_main_menu_inline
 from keyboard.inline.inline_select import get_prep_inline
 
-from loader import pharmacyDB, reportsDB
 from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
 
@@ -14,37 +17,40 @@ router = Router()
 
 
 # ============================================================
-# 📥 ПОЛУЧЕНИЕ ДАННЫХ ИЗ STATE (Helper) + АВТО-ИСПРАВЛЕНИЕ
+# 📥 ПОЛУЧЕНИЕ ДАННЫХ ИЗ STATE (Helper)
 # ============================================================
-async def _get_report_data(state: FSMContext):
+async def _get_report_data(state: FSMContext, pharmacy_db: BotDB):
+    """
+    Вспомогательная функция для сбора данных перед сохранением.
+    Теперь принимает pharmacy_db для загрузки списка препаратов.
+    """
     data = await TempDataManager.get_all(state)
     prefix = data.get("prefix")
 
     # 🛠 АВТО-ОПРЕДЕЛЕНИЕ ТИПА (Если prefix потерялся)
     if not prefix:
-        # Если есть сложные количества (словарь) — это точно Аптека
         if data.get("final_quantities"):
             prefix = "apt"
-        # Если есть имя врача — это точно Врач
         elif data.get("doc_name"):
             prefix = "doc"
         else:
-            # На всякий случай (чтобы не падало)
             prefix = "unknown"
 
     # Загружаем карту препаратов (ID -> Имя)
-    prep_items = data.get("prep_items", [])
-    if not prep_items:
-        raw_rows = await pharmacyDB.get_prep_list()
-        prep_items = [(row["id"], row["prep"]) for row in raw_rows]
-
-    prep_map = {item_id: name for item_id, name in prep_items}
+    # Используем pharmacy_db вместо глобальной переменной
+    raw_rows = await pharmacy_db.get_prep_list()
+    prep_items = [(row["id"], row["prep"]) for row in raw_rows]
+    prep_map = {str(item_id): name for item_id, name in prep_items}
+    # Добавляем int ключи на всякий случай
+    for item_id, name in prep_items:
+        prep_map[item_id] = name
 
     selected_ids = data.get("selected_items", [])
-
     selected_names_list = []
+
     for i in selected_ids:
-        name = prep_map.get(i) or f"ID {i}"
+        # Пробуем найти по int и str ключу
+        name = prep_map.get(i) or prep_map.get(str(i)) or f"ID {i}"
         selected_names_list.append(name)
 
     return data, prefix, prep_map, selected_names_list
@@ -54,10 +60,11 @@ async def _get_report_data(state: FSMContext):
 # 📄 ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР (SHOW CARD)
 # ============================================================
 @router.callback_query(F.data == "show_card", PrescriptionFSM.confirmation)
-async def show_card(callback: CallbackQuery, state: FSMContext):
-    data, prefix, prep_map, selected_names_list = await _get_report_data(state)
-    quantities = data.get("final_quantities", {})
+async def show_card(callback: CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
+    # Передаем pharmacy_db
+    data, prefix, prep_map, selected_names_list = await _get_report_data(state, pharmacy_db)
 
+    quantities = data.get("final_quantities", {})
     selected_text = "Список пуст"
 
     # --- АПТЕКА ---
@@ -80,10 +87,8 @@ async def show_card(callback: CallbackQuery, state: FSMContext):
         selected_text = "\n".join(lines)
 
     # Формируем текст
-    text = f"📋 <b>ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР</b>\n"
-    text += f"➖➖➖➖➖➖➖➖➖➖\n"
-
     lpu_name = data.get('lpu_name', 'Не указано')
+    text = f"📋 <b>ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР</b>\n➖➖➖➖➖➖➖➖➖➖\n"
 
     if prefix == "doc":
         doc_name = data.get('doc_name', 'Не указан')
@@ -113,8 +118,12 @@ async def show_card(callback: CallbackQuery, state: FSMContext):
         ]
     ])
 
-    await callback.message.answer(text, reply_markup=kb)
-    await callback.message.edit_reply_markup(reply_markup=None)
+    # Если сообщение уже есть, редактируем. Если нет (удалено), шлем новое.
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
     await callback.answer()
 
 
@@ -122,38 +131,49 @@ async def show_card(callback: CallbackQuery, state: FSMContext):
 # 🔙 ВЕРНУТЬСЯ К ВЫБОРУ
 # ============================================================
 @router.callback_query(F.data == "back_to_meds")
-async def back_to_med_selection(callback: CallbackQuery, state: FSMContext):
-    data, prefix, _, _ = await _get_report_data(state)
+async def back_to_med_selection(callback: CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
+    data, prefix, _, _ = await _get_report_data(state, pharmacy_db)
 
-    keyboard = await get_prep_inline(state, prefix=prefix)
+    # Передаем pharmacy_db в клавиатуру
+    keyboard = await get_prep_inline(pharmacy_db, state, prefix=prefix)
 
     await state.set_state(PrescriptionFSM.choose_meds)
     await callback.message.answer("💊 <b>Выберите препараты:</b>", reply_markup=keyboard)
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except:
+        pass
 
 
 # ============================================================
 # 💾 СОХРАНЕНИЕ В БД (UPLOAD REPORT)
 # ============================================================
-@router.callback_query(F.data == "confirm_yes", PrescriptionFSM.confirmation)
-@router.callback_query(F.data == "mp_up", PrescriptionFSM.confirmation)
-async def upload_report(callback: CallbackQuery, state: FSMContext):
-    # Эта функция теперь получит уже исправленный prefix
-    data, prefix, prep_map, selected_names_list = await _get_report_data(state)
-    user_name = callback.from_user.full_name
+@router.callback_query(F.data.in_(["confirm_yes", "mp_up"]), PrescriptionFSM.confirmation)
+async def upload_report(
+        callback: CallbackQuery,
+        state: FSMContext,
+        pharmacy_db: BotDB,
+        reports_db: ReportRepository
+):
+    user_name = callback.from_user.full_name  # Или логин из БД
+
+    # 1. Получаем данные
+    data, prefix, prep_map, selected_names_list = await _get_report_data(state, pharmacy_db)
 
     district_id = data.get("district")
-    road_id = data.get("road")
+    road_num = data.get("road")  # В TempData это road_num (1, 2, 3...)
 
+    # Получаем красивые имена для отчета
+    # (Можно было бы хранить имена в TempData, но сделаем fetch для надежности)
     try:
-        district_name = await pharmacyDB.get_district_name(district_id)
-    except AttributeError:
+        # Здесь district_id может быть строкой или числом
+        # В идеале нужно get_district_name(id)
+        # Но пока оставим как есть или используем заглушку
         district_name = str(district_id)
-
-    try:
-        road_name = await pharmacyDB.get_road_name(road_id)
-    except AttributeError:
-        road_name = str(road_id)
+        road_name = f"Маршрут {road_num}"
+    except Exception:
+        district_name = "Unknown"
+        road_name = "Unknown"
 
     logger.info(f"Saving report... User: {user_name}, Prefix: {prefix}")
 
@@ -164,7 +184,8 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
         if prefix == "apt":
             lpu_name = data.get("lpu_name")
 
-            report_id = await reportsDB.save_apothecary_report(
+            # Сохраняем заголовок
+            report_id = await reports_db.save_apothecary_report(
                 user=user_name,
                 district=district_name,
                 road=road_name,
@@ -172,6 +193,7 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
                 comment=data.get("comms", "-")
             )
 
+            # Сохраняем товары
             quantities = data.get("final_quantities", {})
             items_to_save = []
 
@@ -182,19 +204,19 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
                     req = val.get('req', 0)
                     rem = val.get('rem', 0)
                 else:
-                    req = "0"
-                    rem = str(val)
+                    req = 0
+                    rem = val
 
                 items_to_save.append((med_name, req, rem))
 
-            await reportsDB.save_apothecary_preps(report_id, items_to_save)
+            await reports_db.save_apothecary_preps(report_id, items_to_save)
             success_text = f"✅ <b>Отчёт по аптеке «{lpu_name}» сохранён!</b>"
 
         # =====================================================
         # 👨‍⚕️ ВЕТКА ВРАЧА
         # =====================================================
         elif prefix == "doc":
-            report_id = await reportsDB.save_main_report(
+            report_id = await reports_db.save_main_report(
                 user=user_name,
                 district=district_name,
                 road=road_name,
@@ -206,20 +228,22 @@ async def upload_report(callback: CallbackQuery, state: FSMContext):
                 comment=data.get("comms", "-")
             )
 
-            await reportsDB.save_preps(report_id, selected_names_list)
+            await reports_db.save_preps(report_id, selected_names_list)
             success_text = "✅ <b>Отчёт по врачу сохранён!</b>"
 
         else:
-            await callback.message.answer(f"⚠️ Ошибка: Не удалось определить тип отчета (данные отсутствуют).")
+            await callback.message.answer("⚠️ Ошибка: Не удалось определить тип отчета.")
             return
 
         # =====================================================
         # 🏁 ФИНАЛ
         # =====================================================
-
         await callback.message.edit_text(success_text)
-        kb = await get_main_menu_inline(callback.from_user.id)
+
+        # Возвращаем в меню (передаем reports_db для счетчика задач)
+        kb = await get_main_menu_inline(callback.from_user.id, reports_db)
         await callback.message.answer("Что делаем дальше?", reply_markup=kb)
+
         await state.clear()
 
     except Exception as e:

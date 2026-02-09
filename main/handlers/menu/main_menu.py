@@ -2,12 +2,12 @@ from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
-# Импорты ваших клавиатур и состояний
-# from states.main_menu_states import MainMenu
-from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
+# Импортируем классы для аннотации типов
+from db.database import BotDB
+from db.reports import ReportRepository
 
-# Импорт БД (где лежат пользователи)
-from loader import pharmacyDB, accountantDB
+# Импорты ваших клавиатур и состояний
+from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
 router = Router()
 
@@ -16,12 +16,15 @@ router = Router()
 # 🏁 ENTRY POINT: /start
 # ============================================================
 @router.message(Command("start"))
-async def start_command(message: types.Message, state: FSMContext):
+async def start_command(
+        message: types.Message,
+        state: FSMContext,
+        accountant_db: BotDB,  # <-- Внедряем базу пользователей
+        reports_db: ReportRepository  # <-- Внедряем базу отчетов (нужна для меню)
+):
     """
-    Проверяет статус пользователя:
-    1. Нет в базе -> Гостевое меню (Регистрация).
-    2. Есть, но is_approved=0 -> Сообщение "Ждите".
-    3. Есть, is_approved=1 -> Главное меню.
+    Проверяет статус пользователя.
+    Аргументы баз данных (accountant_db, reports_db) попадают сюда автоматически из main.py
     """
     user_id = message.from_user.id
 
@@ -33,17 +36,20 @@ async def start_command(message: types.Message, state: FSMContext):
     # True  - если одобрен
     # False - если есть в базе, но не одобрен (0)
     # None  - если вообще нет в базе
-    is_approved = await accountantDB.is_user_approved(user_id)
+
+    # Используем локальную переменную accountant_db вместо глобальной
+    is_approved = await accountant_db.is_user_approved(user_id)
 
     # --- СЦЕНАРИЙ 1: ПОЛЬЗОВАТЕЛЬ ОДОБРЕН ---
     if is_approved is True:
-        # await state.set_state(MainMenu.logged_in)
+        # Получаем имя для приветствия
+        username = await accountant_db.get_active_username(user_id)
+        if not username:
+            username = message.from_user.first_name
 
-        # Получаем имя для приветствия (если нужно)
-        username = await accountantDB.get_active_username(user_id) or message.from_user.first_name
-
-        # ⚠️ Не забываем await, так как меню теперь проверяет задачи!
-        kb = await get_main_menu_inline(user_id)
+        # ⚠️ ВАЖНОЕ ИЗМЕНЕНИЕ:
+        # Мы передаем reports_db в функцию меню, чтобы она могла посчитать задачи
+        kb = await get_main_menu_inline(user_id, reports_db)
 
         await message.answer(
             f"👋 С возвращением, <b>{username}</b>!\n\n"
@@ -53,9 +59,6 @@ async def start_command(message: types.Message, state: FSMContext):
 
     # --- СЦЕНАРИЙ 2: ЖДЕТ ПОДТВЕРЖДЕНИЯ ---
     elif is_approved is False:
-        # Можно не ставить состояние или поставить какое-то нейтральное
-        # await state.set_state(MainMenu.main)
-
         await message.answer(
             "⏳ <b>Ваш аккаунт ожидает проверки.</b>\n\n"
             "Администратор еще не подтвердил вашу регистрацию.\n"
@@ -64,8 +67,6 @@ async def start_command(message: types.Message, state: FSMContext):
 
     # --- СЦЕНАРИЙ 3: НЕ ЗАРЕГИСТРИРОВАН ---
     else:
-        # await state.set_state(MainMenu.main)
-
         await message.answer(
             "👋 Приветствую! Это бот <b>AnovaPharm</b>.\n\n"
             "Для начала работы необходимо зарегистрироваться и войти в систему.",

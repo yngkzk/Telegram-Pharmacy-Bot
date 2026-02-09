@@ -1,13 +1,12 @@
 import aiosqlite
-from datetime import datetime
 from typing import Optional, List, Any
-
-from utils.text import pw
+from pathlib import Path
 from utils.logger.logger_config import logger
+from utils.text import pw  # Убедись, что этот импорт работает
 
 
 class BotDB:
-    def __init__(self, db_file: str):
+    def __init__(self, db_file: Path):
         self.db_file = db_file
         self.conn: Optional[aiosqlite.Connection] = None
 
@@ -15,39 +14,37 @@ class BotDB:
         """Асинхронное подключение к базе"""
         try:
             self.conn = await aiosqlite.connect(self.db_file)
-            await self.conn.execute("PRAGMA foreign_keys = ON;")
             self.conn.row_factory = aiosqlite.Row
-            # logger.info(f"Connected to SQLite: {self.db_file}")
+            await self.conn.execute("PRAGMA foreign_keys = ON;")
+            logger.info(f"Connected to SQLite: {self.db_file.name}")
         except Exception as e:
             logger.critical(f"Connection failed for {self.db_file}: {e}")
-            raise e
+            raise
 
     async def close(self):
         """Закрытие соединения"""
         if self.conn:
             await self.conn.close()
-            logger.info(f"Async DB connection closed for {self.db_file}")
-
-    # ============================================================
-    # 🛠 Вспомогательные методы (The Core Logic)
-    # ============================================================
+            logger.info(f"DB connection closed: {self.db_file.name}")
 
     def _ensure_conn(self):
-        """Проверка соединения перед запросом"""
+        """Проверка соединения"""
         if not self.conn:
             raise ConnectionError(f"Database {self.db_file} is not connected! Call .connect() first.")
 
-    async def _fetchall(self, query: str, params: tuple = ()) -> List[aiosqlite.Row]:
-        self._ensure_conn()
-        async with self.conn.execute(query, params) as cursor:
-            return await cursor.fetchall()
+    # --- Универсальные методы (CRUD) ---
 
-    async def _fetchone(self, query: str, params: tuple = ()) -> Optional[aiosqlite.Row]:
+    async def fetchone(self, query: str, params: tuple = ()) -> Optional[aiosqlite.Row]:
         self._ensure_conn()
         async with self.conn.execute(query, params) as cursor:
             return await cursor.fetchone()
 
-    async def _execute(self, query: str, params: tuple = ()) -> None:
+    async def fetchall(self, query: str, params: tuple = ()) -> List[aiosqlite.Row]:
+        self._ensure_conn()
+        async with self.conn.execute(query, params) as cursor:
+            return await cursor.fetchall()
+
+    async def execute(self, query: str, params: tuple = ()) -> None:
         self._ensure_conn()
         await self.conn.execute(query, params)
         await self.conn.commit()

@@ -1,21 +1,27 @@
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from db.reports import ReportRepository
 
+# Импортируем класс базы для подсказок типов (Type Hinting)
+from db.database import BotDB
+# Импортируем конфиг для доступа к ID админов
+from utils.config.settings import config
+# Хеширование паролей
+from utils.text.pw import hash_password
+
+# Состояния
 from states.menu.register_state import Register, LoginFSM
 from states.menu.main_menu_state import MainMenu
 
-from loader import accountantDB
-from utils.text.pw import hash_password
-
-# Импортируем готовые клавиатуры
+# Клавиатуры
 from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
 router = Router()
 
 
 # ============================================================
-# 🚪 ВХОД В СИСТЕМУ (ВЫБОР: РЕГИСТРАЦИЯ ИЛИ ЛОГИН)
+# 🚪 ВХОД В СИСТЕМУ
 # ============================================================
 @router.callback_query(F.data == "start_registration")
 async def show_auth_choice(callback: types.CallbackQuery, state: FSMContext):
@@ -39,8 +45,9 @@ async def show_auth_choice(callback: types.CallbackQuery, state: FSMContext):
 async def cancel_auth(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(MainMenu.main)
+    # Здесь можно добавить логику возврата к главному меню
     await callback.message.edit_text(
-        "🏠 Возврат в меню гостя.",
+        "🏠 Вы вернулись в меню гостя.",
         reply_markup=get_guest_menu_inline()
     )
     await callback.answer()
@@ -51,28 +58,27 @@ async def cancel_auth(callback: types.CallbackQuery, state: FSMContext):
 # ============================================================
 
 @router.callback_query(F.data == "auth_existing")
-async def start_login_flow(callback: types.CallbackQuery, state: FSMContext):
+async def start_login_flow(callback: types.CallbackQuery, state: FSMContext, accountant_db: BotDB):
     """
-    1. Получает список юзеров из БД.
-    2. Показывает их в виде кнопок.
+    Магия DI: accountant_db прилетает сюда автоматически из main.py
     """
-    users = await accountantDB.get_user_list()  # Возвращает список строк ['Ivan', 'Admin']
+    users = await accountant_db.get_user_list()
 
     if not users:
         await callback.message.edit_text(
-            "⚠️ В базе пока нет пользователей. Пожалуйста, зарегистрируйтесь.",
+            "⚠️ В базе пока нет подтвержденных пользователей.",
             reply_markup=get_guest_menu_inline()
         )
         return
 
-    # Строим клавиатуру с именами пользователей
     builder = InlineKeyboardBuilder()
     for user in users:
-        # callback_data="login_user_Ivan"
+        # Важно: если user содержит пробелы или спецсимволы, это может сломать callback.
+        # Лучше использовать ID, но пока оставим как есть.
         builder.button(text=f"👤 {user}", callback_data=f"login_user_{user}")
 
     builder.button(text="🔙 Назад", callback_data="start_registration")
-    builder.adjust(2)  # По 2 имени в ряд
+    builder.adjust(2)
 
     await state.set_state(LoginFSM.choose_user)
     await callback.message.edit_text(
@@ -84,9 +90,6 @@ async def start_login_flow(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("login_user_"), LoginFSM.choose_user)
 async def user_selected(callback: types.CallbackQuery, state: FSMContext):
-    """
-    Пользователь выбрал своё имя.
-    """
     username = callback.data.split("login_user_")[1]
 
     await state.update_data(username=username)
@@ -95,40 +98,36 @@ async def user_selected(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"🔑 Профиль: <b>{username}</b>\n\n"
         "✍️ Введите ваш пароль:",
-        reply_markup=None  # Убираем кнопки, ждем текст
+        reply_markup=None
     )
     await callback.answer()
 
 
 @router.message(LoginFSM.enter_password)
-async def check_password(message: types.Message, state: FSMContext):
-    """
-    Проверка пароля.
-    """
+async def check_password(
+    message: types.Message,
+    state: FSMContext,
+    accountant_db: BotDB,
+    reports_db: ReportRepository
+):
     password = message.text
     data = await state.get_data()
     username = data.get("username")
     user_id = message.from_user.id
 
-    # Попытка удалить сообщение с паролем для безопасности
-    try:
-        await message.delete()
-    except:
-        pass
+    if await accountant_db.check_password(username, password):
+        await accountant_db.set_logged_in(user_id, username, 1)
 
-    if await accountantDB.check_password(username, password):
-        # ✅ УСПЕХ
-        await accountantDB.set_logged_in(user_id, username, 1)
-        kb = await get_main_menu_inline(user_id)
+        # ВОТ ЗДЕСЬ ИЗМЕНЕНИЕ: передаем reports_db в функцию меню
+        kb = await get_main_menu_inline(user_id, reports_db)
+
         await state.set_state(MainMenu.logged_in)
         await message.answer(
             f"✅ Добро пожаловать, <b>{username}</b>!",
             reply_markup=kb
         )
     else:
-        # ❌ ОШИБКА
-        msg = await message.answer("❌ Неверный пароль. Попробуйте снова:")
-        # (Опционально можно добавить кнопку отмены, если забыл пароль)
+        await message.answer("❌ Неверный пароль. Попробуйте снова:")
 
 
 # ============================================================
@@ -137,14 +136,10 @@ async def check_password(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "auth_new")
 async def start_register_flow(callback: types.CallbackQuery, state: FSMContext):
-    """
-    1. Спрашиваем регион.
-    """
     await state.set_state(Register.region)
     await callback.message.edit_text(
         "📝 <b>Регистрация</b>\n\n"
         "Введите ваш <b>Регион</b> (например: АЛА или ЮКО):"
-        # Можно добавить Inline кнопки с регионами, если их мало
     )
     await callback.answer()
 
@@ -152,7 +147,6 @@ async def start_register_flow(callback: types.CallbackQuery, state: FSMContext):
 @router.message(Register.region)
 async def get_region(message: types.Message, state: FSMContext):
     await state.update_data(region=message.text)
-
     await state.set_state(Register.login)
     await message.answer("👤 Придумайте <b>Логин</b> (Имя пользователя):")
 
@@ -160,12 +154,8 @@ async def get_region(message: types.Message, state: FSMContext):
 @router.message(Register.login)
 async def get_login(message: types.Message, state: FSMContext):
     username = message.text
-
-    # Проверка, занят ли логин (Опционально, если есть такой метод в БД)
-    # if await accountantDB.user_exists(username): ...
-
+    # Тут можно добавить проверку на уникальность логина через accountant_db
     await state.update_data(login=username)
-
     await state.set_state(Register.password)
     await message.answer("🔑 Придумайте <b>Пароль</b>:")
 
@@ -174,16 +164,18 @@ async def get_login(message: types.Message, state: FSMContext):
 async def get_password(message: types.Message, state: FSMContext):
     await state.update_data(password=message.text)
     try:
-        await message.delete()  # Скрываем пароль
+        await message.delete()
     except:
         pass
-
     await state.set_state(Register.confirm)
     await message.answer("🔐 <b>Повторите пароль</b> для подтверждения:")
 
 
 @router.message(Register.confirm)
-async def confirm_password(message: types.Message, state: FSMContext):
+async def confirm_password(message: types.Message, state: FSMContext, accountant_db: BotDB, bot: Bot):
+    """
+    Сюда прилетает и база (accountant_db), и сам бот (bot), чтобы слать уведомления админам.
+    """
     data = await state.get_data()
 
     try:
@@ -196,40 +188,46 @@ async def confirm_password(message: types.Message, state: FSMContext):
         await state.set_state(Register.password)
         return
 
-    # --- СОХРАНЕНИЕ В БД ---
+    # --- Сбор данных ---
     user_id = message.from_user.id
     user_name = data["login"]
     raw_password = data["password"]
     region = data["region"]
 
+    # Хешируем пароль ПЕРЕД сохранением
     hashed_pw = hash_password(raw_password)
 
     try:
-        await accountantDB.add_user(user_id, user_name, hashed_pw, region)
+        # Сохраняем в БД (теперь user_password хранит хеш)
+        await accountant_db.add_user(user_id, user_name, hashed_pw, region)
 
-        # Сразу логиним пользователя
-        await accountantDB.set_logged_in(user_id, user_name, 1)
-
-        # kb = await get_main_menu_inline(user_id)
-        #
-        # await state.set_state(MainMenu.logged_in)
-        # await message.answer(
-        #     f"✅ Регистрация успешна!\nВы вошли как <b>{user_name}</b>.",
-        #     reply_markup=kb
-        # )
-
+        # Уведомление пользователю
         await message.answer(
             "✅ <b>Заявка отправлена!</b>\n\n"
             "Ваш аккаунт находится на проверке у администратора.\n"
             "Как только вам дадут доступ, бот пришлет уведомление."
         )
 
-        # ОПЦИОНАЛЬНО: Уведомить админов сразу
-        # for admin_id in ADMIN_IDS:
-        #     await bot.send_message(admin_id, f"🔔 Новая регистрация: {name} ({phone})")
+        # 🔔 Уведомление АДМИНАМ (Теперь это работает!)
+        admin_text = (
+            f"🔔 <b>Новая регистрация!</b>\n"
+            f"👤 Имя: {user_name}\n"
+            f"📍 Регион: {region}\n"
+            f"🆔 Telegram ID: {user_id}\n\n"
+            f"Используйте /admin чтобы подтвердить."
+        )
+
+        for admin_id in config.admin_ids:
+            try:
+                await bot.send_message(admin_id, admin_text)
+            except Exception as e:
+                # Если админ заблокировал бота, не роняем код
+                print(f"Failed to send admin notification to {admin_id}: {e}")
 
         await state.clear()
 
     except Exception as e:
         await message.answer(f"❌ Ошибка при регистрации: {e}")
+        # Логируем ошибку, чтобы видеть в консоли
+        print(f"Registration Error: {e}")
         await state.clear()
