@@ -1,113 +1,73 @@
 from aiogram.fsm.context import FSMContext
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Optional, Dict
 
 
 class TempDataManager:
     """
-    Управление временными данными пользователя в FSMContext.
-    Оптимизирован для минимизации чтений/записей в Redis/Memory.
+    Класс-обертка для удобной работы с FSMContext (временным хранилищем).
     """
 
-    # ============================================================
-    # 📦 CORE DATA METHODS
-    # ============================================================
-
     @staticmethod
-    async def set(state: FSMContext, key: str, value: Any) -> None:
-        """Сохраняет одно значение."""
+    async def set(state: FSMContext, key: str, value: Any):
+        """Сохранить значение по ключу"""
         await state.update_data({key: value})
 
     @staticmethod
-    async def update(state: FSMContext, data: Dict[str, Any]) -> None:
-        """Сохраняет сразу словарь значений."""
-        await state.update_data(data)
-
-    @staticmethod
-    async def get(state: FSMContext, key: str, default: Optional[Any] = None) -> Any:
-        """Возвращает одно значение."""
+    async def get(state: FSMContext, key: str, default: Any = None) -> Any:
+        """Получить значение по ключу"""
         data = await state.get_data()
         return data.get(key, default)
 
     @staticmethod
-    async def get_many(state: FSMContext, *keys: str) -> Tuple[Any, ...]:
-        """
-        Возвращает кортеж значений.
-        Пример: name, age = await TempDataManager.get_many(state, "name", "age")
-        """
-        data = await state.get_data()
-        return tuple(data.get(k) for k in keys)
-
-    @staticmethod
     async def get_all(state: FSMContext) -> Dict[str, Any]:
-        """
-        🔥 NEW: Возвращает ВСЕ данные состояния.
-        Нужен для генерации итогового отчета.
-        """
+        """Получить все данные"""
         return await state.get_data()
 
     @staticmethod
-    async def remove(state: FSMContext, *keys: str) -> None:
-        """Удаляет указанные ключи из состояния."""
+    async def get_many(state: FSMContext, *keys) -> list:
+        """Получить сразу несколько значений"""
         data = await state.get_data()
-        changed = False
-        for k in keys:
-            if k in data:
-                data.pop(k)
-                changed = True
-
-        # Перезаписываем только если были изменения
-        if changed:
-            await state.set_data(data)
+        return [data.get(key) for key in keys]
 
     @staticmethod
-    async def clear(state: FSMContext) -> None:
-        """Полностью очищает FSM."""
-        await state.clear()
+    async def remove(state: FSMContext, *keys):
+        """Удалить ключи из состояния"""
+        data = await state.get_data()
+        new_data = {k: v for k, v in data.items() if k not in keys}
+        await state.set_data(new_data)
 
-    # ============================================================
-    # 🔘 BUTTON MEMORY (Для сохранения текста нажатых кнопок)
-    # ============================================================
+    # ==========================================
+    # 🔘 ЛОГИКА ДЛЯ ИМЕН КНОПОК (ЭТОГО НЕ БЫЛО)
+    # ==========================================
 
     @staticmethod
-    async def save_button(state: FSMContext, callback_data: str, text: str) -> None:
-        """
-        Сохраняет маппинг callback -> text.
-        Оптимизировано: не перезаписывает весь стейт.
-        """
+    async def save_button(state: FSMContext, callback_data: str, text: str):
+        """Сохраняет текст кнопки, привязанный к ее callback_data"""
         data = await state.get_data()
-        buttons: Dict[str, str] = data.get("button_memory", {})
-
-        # Обновляем локально
+        # Используем отдельный словарь внутри state, чтобы не мусорить
+        buttons = data.get("buttons_map", {})
         buttons[callback_data] = text
-
-        # Записываем только обновленный словарь кнопок
-        await state.update_data(button_memory=buttons)
+        await state.update_data(buttons_map=buttons)
 
     @staticmethod
     async def get_button_name(state: FSMContext, callback_data: str) -> Optional[str]:
+        """Возвращает текст кнопки по callback_data"""
         data = await state.get_data()
-        buttons = data.get("button_memory", {})
+        buttons = data.get("buttons_map", {})
         return buttons.get(callback_data)
 
-    @staticmethod
-    async def clear_buttons(state: FSMContext) -> None:
-        """Быстрая очистка памяти кнопок."""
-        await state.update_data(button_memory={})
-
-    # ============================================================
-    # 🧩 EXTRA DATA (Для сложных структур)
-    # ============================================================
+    # ==========================================
+    # 🔗 ЛОГИКА ДЛЯ URL (ДОП. ДАННЫЕ)
+    # ==========================================
 
     @staticmethod
-    async def save_extra(state: FSMContext, callback: str, **kwargs) -> None:
-        """Сохраняет доп. данные для конкретного callback."""
+    async def get_extra(state: FSMContext, key: str) -> Optional[dict]:
+        """Получает доп. данные (например, URL)"""
         data = await state.get_data()
-        extra = data.get("extra", {})
-        extra[callback] = kwargs
-        await state.update_data(extra=extra)
-
-    @staticmethod
-    async def get_extra(state: FSMContext, callback: str) -> Optional[Dict[str, Any]]:
-        data = await state.get_data()
-        extra = data.get("extra", {})
-        return extra.get(callback)
+        # Мы сохраняли URL как "url_prefix_id", попробуем найти
+        # Это упрощенная логика, можно адаптировать под твои нужды
+        url_key = f"url_{key}"
+        url = data.get(url_key)
+        if url:
+            return {'url': url}
+        return None

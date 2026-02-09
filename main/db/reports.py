@@ -1,350 +1,277 @@
 import aiosqlite
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
+from pathlib import Path
 from datetime import datetime
 from utils.logger.logger_config import logger
 
 
 class ReportRepository:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
+    def __init__(self, db_file: Path):
+        self.db_file = db_file
         self.conn: Optional[aiosqlite.Connection] = None
 
     async def connect(self):
-        """Подключение к базе"""
-        try:
-            self.conn = await aiosqlite.connect(self.db_path)
-            self.conn.row_factory = aiosqlite.Row
-            await self.conn.execute("PRAGMA foreign_keys = ON;")
-            # logger.info(f"Report DB connected: {self.db_path}")
-        except Exception as e:
-            logger.critical(f"Failed to connect to Report DB: {e}")
-            raise e
+        """Подключается к БД."""
+        self.conn = await aiosqlite.connect(self.db_file)
+        self.conn.row_factory = aiosqlite.Row
+
+        # Мы не создаем таблицы заново, так как они уже есть в твоей базе.
+        # Но на всякий случай создадим таблицы для задач, если их нет (tasks),
+        # так как они могли появиться позже.
+        await self.create_tasks_tables()
+        logger.info(f"Connected to existing Reports DB: {self.db_file.name}")
+
+    async def create_tasks_tables(self):
+        """Создает только таблицы для задач и прогресса, если их нет."""
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1
+            )
+        """)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_task_progress (
+                user_id INTEGER PRIMARY KEY,
+                last_task_id INTEGER
+            )
+        """)
+        await self.conn.commit()
 
     async def close(self):
         if self.conn:
             await self.conn.close()
-            logger.info("Report DB connection closed")
 
     def _ensure_conn(self):
         if not self.conn:
-            raise ConnectionError("ReportDB is not connected!")
+            raise ConnectionError("Reports DB is not connected")
 
     # ============================================================
-    # 1. СОХРАНЕНИЕ ОСНОВНОГО ОТЧЁТА
+    # 📝 SAVE REPORTS (Сохранение в СТАРЫЕ таблицы)
     # ============================================================
-    async def save_main_report(
-            self,
-            user: str,
-            district: str,
-            road: str,
-            lpu: str,
-            doctor_name: str,
-            doctor_spec: str,
-            doctor_number: str,
-            term: str,
-            comment: str
-    ) -> int:
+
+    async def save_main_report(self, user, district, road, lpu, doctor_name, doctor_spec, doctor_number, term, comment):
         self._ensure_conn()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        query = '''
-            INSERT INTO main_reports
-            (date, user, district, road, lpu, doc_name, doc_spec, doc_num, term, commentary)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
+        cursor = await self.conn.execute("""
+            INSERT INTO main_reports (
+                user, district, road, lpu, 
+                doc_name, doc_spec, doc_num, 
+                term, commentary, date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user, district, road, lpu, doctor_name, doctor_spec, doctor_number, term, comment, current_time))
+        await self.conn.commit()
+        return cursor.lastrowid
 
-        # Using ISO format is safer for sorting
-        date_value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        async with self.conn.execute(
-                query,
-                (
-                        date_value, user, district, road, lpu,
-                        doctor_name, doctor_spec, doctor_number,
-                        term, comment
-                )
-        ) as cursor:
-            await self.conn.commit()
-            logger.info(f"New report saved. ID: {cursor.lastrowid} by {user}")
-            return cursor.lastrowid
-
-    # ============================================================
-    # 2. СОХРАНЕНИЕ СПИСКА ПРЕПАРАТОВ
-    # ============================================================
-    async def save_preps(self, report_id: int, preps: List[str]) -> None:
+    async def save_preps(self, report_id, preps_list):
         self._ensure_conn()
-
-        if not preps:
-            return
-
-        data = [(report_id, p) for p in preps]
-
-        await self.conn.executemany(
-            '''
-            INSERT INTO detailed_report (report_id, prep)
-            VALUES (?, ?)
-            ''',
-            data
-        )
+        # Используем таблицу detailed_report
+        data = [(report_id, prep_name) for prep_name in preps_list]
+        await self.conn.executemany("INSERT INTO detailed_report (report_id, prep) VALUES (?, ?)", data)
         await self.conn.commit()
 
-    # ============================================================
-    # 3. ПОЛУЧЕНИЕ ПОЛНОГО ОТЧЁТА
-    # ============================================================
-    async def get_full_report(self, report_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Получает основной отчёт + список препаратов.
-        Возвращает None, если отчёт не найден.
-        """
+    async def save_apothecary_report(self, user, district, road, lpu, comment):
         self._ensure_conn()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        main_query = "SELECT * FROM main_reports WHERE id = ?"
-        preps_query = "SELECT prep FROM detailed_report WHERE report_id = ?"
+        cursor = await self.conn.execute("""
+            INSERT INTO apothecary_report (
+                user, district, road, apothecary, commentary, date
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """, (user, district, road, lpu, comment, current_time))
+        await self.conn.commit()
+        return cursor.lastrowid
 
-        # 1. Get Main Info
-        async with self.conn.execute(main_query, (report_id,)) as cursor:
-            main_data = await cursor.fetchone()
-
-        # SAFETY CHECK: If ID doesn't exist, return None immediately
-        if not main_data:
-            logger.warning(f"Requested report {report_id} not found.")
-            return None
-
-        # 2. Get Preps (only if main exists)
-        async with self.conn.execute(preps_query, (report_id,)) as cursor:
-            preps_data = await cursor.fetchall()
-
-        return {
-            "id": report_id,
-            "date": main_data["date"],
-            "user": main_data["user"],
-            "district": main_data["district"],
-            "road": main_data["road"],
-            "lpu": main_data["lpu"],
-            "doc_name": main_data["doc_name"],
-            "doc_spec": main_data["doc_spec"],
-            "doc_num": main_data["doc_num"],
-            "term": main_data["term"],
-            "commentary": main_data["commentary"],
-            "preps": [p["prep"] for p in preps_data]
-        }
-
-    # ============================================================
-    # 4. (NEW) SAVE PHARMACY REPORT (MAIN)
-    # ============================================================
-    async def save_apothecary_report(
-            self,
-            user: str,
-            district: str,
-            road: str,
-            lpu: str,
-            comment: str
-    ) -> int:
-        """
-        Saves the main header for a pharmacy report.
-        Returns the new Report ID.
-        """
+    async def save_apothecary_preps(self, report_id, items):
+        """items = [(name, req, rem), ...]"""
         self._ensure_conn()
-
-        query = '''
-            INSERT INTO apothecary_report
-            (date, user, district, road, apothecary, commentary)
-            VALUES (?, ?, ?, ?, ?, ?)
-        '''
-
-        date_value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        async with self.conn.execute(
-                query,
-                (date_value, user, district, road, lpu, comment)
-        ) as cursor:
-            await self.conn.commit()
-            logger.info(f"New Apothecary report saved. ID: {cursor.lastrowid}")
-            return cursor.lastrowid
-
-    # ============================================================
-    # 5. (NEW) SAVE PHARMACY ITEMS (DETAILS)
-    # ============================================================
-    async def save_apothecary_preps(self, report_id: int, items: list) -> None:
-        """
-        Saves items with separate Request and Remaining values.
-        items: List of tuples -> [(PrepName, RequestQty, RemainingQty), ...]
-        """
-        self._ensure_conn()
-        if not items:
-            return
-
-        # Prepare data: (report_id, prep, request, remaining)
-        data = [(report_id, name, str(req), str(rem)) for name, req, rem in items]
-
-        await self.conn.executemany(
-            '''
-            INSERT INTO apothecary_detailed_report (report_id, prep, request, remaining)
+        # Используем таблицу apothecary_detailed_report
+        # Колонки: prep, request, remaining
+        data = [(report_id, item[0], str(item[1]), str(item[2])) for item in items]
+        await self.conn.executemany("""
+            INSERT INTO apothecary_detailed_report (report_id, prep, request, remaining) 
             VALUES (?, ?, ?, ?)
-            ''',
-            data
-        )
+        """, data)
         await self.conn.commit()
 
     # ============================================================
-    # 🔍 GET LAST REPORT FOR DOCTOR
+    # 📊 FETCH DATA (Для Excel и Фильтрации)
     # ============================================================
-    async def get_last_doctor_report(self, user: str, doc_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetches the most recent report for a specific doctor by the current user.
-        """
+
+    async def fetch_filtered_doctor_data(
+            self,
+            start_date: str,
+            end_date: str,
+            user_name: Optional[str] = None
+    ) -> List[dict]:
         self._ensure_conn()
 
-        # 1. Find the latest report ID
-        query = '''
-            SELECT id, date, term, commentary 
-            FROM main_reports 
-            WHERE user = ? AND doc_name = ? 
-            ORDER BY date DESC 
-            LIMIT 1
-        '''
-
-        async with self.conn.execute(query, (user, doc_name)) as cursor:
-            row = await cursor.fetchone()
-
-        if not row:
-            return None
-
-        report_id = row["id"]
-
-        # 2. Get the medications for this report
-        async with self.conn.execute("SELECT prep FROM detailed_report WHERE report_id = ?", (report_id,)) as cursor:
-            preps_rows = await cursor.fetchall()
-            preps = [p["prep"] for p in preps_rows]
-
-        return {
-            "date": row["date"],
-            "term": row["term"],
-            "commentary": row["commentary"],
-            "preps": preps
-        }
-
-    # ============================================================
-    # 📊 EXPORT METHODS (FETCH ALL DATA)
-    # ============================================================
-    async def fetch_all_doctor_data(self):
-        """Fetches joined Doctor reports + Medications"""
-        self._ensure_conn()
-        query = """
+        # SQL адаптирован под main_reports
+        sql = """
             SELECT 
-                m.id, m.date, m.user, m.district, m.road, m.lpu, 
-                m.doc_name, m.doc_spec, m.doc_num, m.term, m.commentary,
-                d.prep
-            FROM main_reports m
-            LEFT JOIN detailed_report d ON m.id = d.report_id
-            ORDER BY m.date DESC
+                r.id,
+                r.date as created_at, 
+                r.user as user_name,
+                r.district,
+                r.road,
+                r.lpu,
+                r.doc_name as doctor_name,
+                r.doc_spec as doctor_spec,
+                r.doc_num as doctor_number,
+                r.term,
+                r.commentary,
+                GROUP_CONCAT(p.prep, ', ') as preps
+            FROM main_reports r
+            LEFT JOIN detailed_report p ON r.id = p.report_id
+            WHERE date(r.date) BETWEEN date(?) AND date(?)
         """
-        async with self.conn.execute(query) as cursor:
+        params = [start_date, end_date]
+
+        if user_name and user_name != "all":
+            sql += " AND r.user = ?"
+            params.append(user_name)
+
+        sql += " GROUP BY r.id ORDER BY r.date DESC"
+
+        async with self.conn.execute(sql, tuple(params)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def fetch_all_apothecary_data(self):
+    async def fetch_filtered_apothecary_data(
+            self,
+            start_date: str,
+            end_date: str,
+            user_name: Optional[str] = None
+    ) -> List[dict]:
         self._ensure_conn()
-        query = """
+
+        # SQL адаптирован под apothecary_report
+        sql = """
             SELECT 
-                a.id, a.date, a.user, a.district, a.road, a.apothecary as lpu_name, 
-                a.commentary,
-                ad.prep, 
-                ad.request,   -- NEW COLUMN
-                ad.remaining  -- EXISTING COLUMN
-            FROM apothecary_report a
-            LEFT JOIN apothecary_detailed_report ad ON a.id = ad.report_id
-            ORDER BY a.date DESC
+                r.id,
+                r.date as created_at,
+                r.user as user_name,
+                r.district,
+                r.road,
+                r.apothecary as lpu,
+                p.prep as prep_name,
+                p.request as req_qty,
+                p.remaining as rem_qty,
+                r.commentary
+            FROM apothecary_report r
+            JOIN apothecary_detailed_report p ON r.id = p.report_id
+            WHERE date(r.date) BETWEEN date(?) AND date(?)
         """
-        async with self.conn.execute(query) as cursor:
+        params = [start_date, end_date]
+
+        if user_name and user_name != "all":
+            sql += " AND r.user = ?"
+            params.append(user_name)
+
+        sql += " ORDER BY r.date DESC"
+
+        async with self.conn.execute(sql, tuple(params)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
     # ============================================================
-    # 🔍 GET LAST APOTHECARY REPORT
-    # ============================================================
-    async def get_last_apothecary_report(self, user: str, lpu_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetches the most recent report for a specific Pharmacy by the current user.
-        """
-        self._ensure_conn()
-
-        # 1. Find the latest report ID
-        # Note: In apothecary_report, the column for the place name is 'apothecary'
-        query = '''
-            SELECT id, date, commentary 
-            FROM apothecary_report 
-            WHERE user = ? AND apothecary = ? 
-            ORDER BY date DESC 
-            LIMIT 1
-        '''
-
-        async with self.conn.execute(query, (user, lpu_name)) as cursor:
-            row = await cursor.fetchone()
-
-        if not row:
-            return None
-
-        report_id = row["id"]
-
-        # 2. Get the items
-        # We fetch prep, request, and remaining
-        sql = "SELECT prep, request, remaining FROM apothecary_detailed_report WHERE report_id = ?"
-
-        async with self.conn.execute(sql, (report_id,)) as cursor:
-            rows = await cursor.fetchall()
-
-            # Format nicely for display: "Aspirin (Req: 10 / Rem: 5)"
-            items = []
-            for r in rows:
-                req = r['request'] if r['request'] else "0"
-                rem = r['remaining'] if r['remaining'] else "0"
-                items.append(f"{r['prep']} (Заявка: {req} / Остаток: {rem})")
-
-        return {
-            "date": row["date"],
-            "commentary": row["commentary"],
-            "items": items
-        }
-
-    # ============================================================
-    # 📋 ЗАДАЧИ (TASKS)
+    # 📋 TASKS (Задачи - без изменений, таблица tasks существует)
     # ============================================================
 
     async def add_task(self, text: str):
-        """Админ добавляет задачу"""
         self._ensure_conn()
-        await self.conn.execute("INSERT INTO tasks (text) VALUES (?)", (text,))
+        await self.conn.execute(
+            "INSERT INTO tasks (text, created_at, is_active) VALUES (?, ?, 1)",
+            (text, datetime.now())
+        )
         await self.conn.commit()
 
-    async def get_active_tasks(self):
-        """Получить все активные задачи"""
+    async def get_active_tasks(self) -> List[dict]:
         self._ensure_conn()
-        async with self.conn.execute("SELECT id, text FROM tasks WHERE is_active = 1 ORDER BY id DESC") as cursor:
-            return await cursor.fetchall()
+        # Проверяем, есть ли колонка is_active (на случай старой версии таблицы)
+        try:
+            async with self.conn.execute(
+                    "SELECT id, text, created_at FROM tasks WHERE is_active = 1 ORDER BY id DESC LIMIT 5"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception:
+            # Если таблицы нет или структура другая, вернем пустоту
+            return []
 
     async def get_unread_count(self, user_id: int) -> int:
-        """Считает, сколько задач пользователь еще НЕ открывал"""
         self._ensure_conn()
-        # Логика: Берем активные задачи, которых НЕТ в таблице просмотров для этого юзера
-        query = """
-            SELECT COUNT(*) 
-            FROM tasks 
-            WHERE is_active = 1 
-            AND id NOT IN (SELECT task_id FROM task_views WHERE user_id = ?)
-        """
-        async with self.conn.execute(query, (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else 0
+        try:
+            async with self.conn.execute(
+                    "SELECT last_task_id FROM user_task_progress WHERE user_id = ?",
+                    (user_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                last_seen_id = row['last_task_id'] if row else 0
+
+            async with self.conn.execute(
+                    "SELECT COUNT(*) FROM tasks WHERE is_active = 1 AND id > ?",
+                    (last_seen_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+        except Exception:
+            return 0
 
     async def mark_all_as_read(self, user_id: int):
-        """Отмечает все текущие активные задачи как прочитанные"""
         self._ensure_conn()
-        # Получаем ID всех активных задач
-        tasks = await self.get_active_tasks()
-        if not tasks:
-            return
+        try:
+            async with self.conn.execute("SELECT MAX(id) FROM tasks WHERE is_active = 1") as cursor:
+                row = await cursor.fetchone()
+                max_id = row[0] if row and row[0] else 0
 
-        # Записываем просмотры (игнорируем дубликаты благодаря INSERT OR IGNORE)
-        data = [(user_id, task['id']) for task in tasks]
-        await self.conn.executemany("INSERT OR IGNORE INTO task_views (user_id, task_id) VALUES (?, ?)", data)
-        await self.conn.commit()
+            if max_id == 0:
+                return
+
+            await self.conn.execute("""
+                INSERT OR REPLACE INTO user_task_progress (user_id, last_task_id)
+                VALUES (?, ?)
+            """, (user_id, max_id))
+            await self.conn.commit()
+        except Exception:
+            pass
+
+    # ============================================================
+    # 🕵️‍♂️ GET LAST REPORT (Адаптировано)
+    # ============================================================
+    async def get_last_doctor_report(self, user_name: str, doctor_name: str) -> Optional[dict]:
+        self._ensure_conn()
+
+        # Запрос к main_reports
+        sql = """
+            SELECT id, date, term, commentary
+            FROM main_reports
+            WHERE user = ? AND doc_name = ?
+            ORDER BY date DESC
+            LIMIT 1
+        """
+        try:
+            async with self.conn.execute(sql, (user_name, doctor_name)) as cursor:
+                report = await cursor.fetchone()
+
+            if not report:
+                return None
+
+            report_id = report['id']
+            # Запрос к detailed_report
+            async with self.conn.execute("SELECT prep FROM detailed_report WHERE report_id = ?",
+                                         (report_id,)) as cursor:
+                prep_rows = await cursor.fetchall()
+                preps = [r['prep'] for r in prep_rows]
+
+            return {
+                "date": str(report['date'])[:10],
+                "term": report['term'],
+                "commentary": report['commentary'],
+                "preps": preps
+            }
+        except Exception as e:
+            logger.error(f"Error fetching last report: {e}")
+            return None

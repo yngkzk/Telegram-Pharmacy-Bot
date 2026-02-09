@@ -1,145 +1,121 @@
-import pandas as pd
-import re
-from io import BytesIO
-from openpyxl.styles import Alignment
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
 
-def adjust_column_widths(worksheet, df, wrap_cols: list):
+def create_excel_report(doc_data: list, apt_data: list) -> io.BytesIO:
     """
-    Helper function to autofit columns while handling wrapped text specific columns.
+    Генерирует Excel файл с двумя листами: Врачи и Аптеки.
     """
-    for i, col in enumerate(df.columns):
-        col_idx = i + 1
-        col_letter = get_column_letter(col_idx)
+    wb = Workbook()
 
-        # 1. HANDLE LONG TEXT COLUMNS (Fixed Width + Wrap)
-        if col in wrap_cols:
-            worksheet.column_dimensions[col_letter].width = 30  # Slightly narrower since we split cols
-            for cell in worksheet[col_letter]:
-                cell.alignment = Alignment(wrap_text=True, vertical='top')
+    # ==========================================
+    # 📄 ЛИСТ 1: ОТЧЕТЫ ПО ВРАЧАМ
+    # ==========================================
+    ws1 = wb.active
+    ws1.title = "Врачи"
 
-        # 2. HANDLE STANDARD COLUMNS (Autofit)
-        else:
-            max_len = df[col].astype(str).map(len).max()
-            header_len = len(str(col))
-            adjusted_width = max(max_len, header_len) + 2
+    # Заголовки
+    headers1 = [
+        "ID", "Дата", "Сотрудник",
+        "Район", "Маршрут", "ЛПУ",
+        "Врач", "Специальность", "Телефон",
+        "Условия", "Препараты", "Комментарий"
+    ]
+    ws1.append(headers1)
 
-            if adjusted_width > 30:
-                adjusted_width = 30
+    # Данные
+    if doc_data:
+        for row in doc_data:
+            # Превращаем объект строки БД в список значений
+            # Порядок должен совпадать с заголовками!
+            ws1.append([
+                row['id'],
+                row['created_at'],
+                row['user_name'],
+                row['district'],
+                row['road'],
+                row['lpu'],
+                row['doctor_name'],
+                row['doctor_spec'],
+                row['doctor_number'],
+                row['term'],
+                row['preps'],  # Список препаратов
+                row['commentary']
+            ])
 
-            worksheet.column_dimensions[col_letter].width = adjusted_width
-            for cell in worksheet[col_letter]:
-                cell.alignment = Alignment(vertical='top')
+    # ==========================================
+    # 📄 ЛИСТ 2: ОТЧЕТЫ ПО АПТЕКАМ
+    # ==========================================
+    ws2 = wb.create_sheet(title="Аптеки")
 
+    headers2 = [
+        "ID", "Дата", "Сотрудник",
+        "Район", "Маршрут", "Точка (Аптека)",
+        "Препарат", "Заявка (шт)", "Остаток (шт)",
+        "Комментарий"
+    ]
+    ws2.append(headers2)
 
-def extract_qty(text, kind='req'):
-    """
-    Parses string like "Заявка: 10 | Остаток: 5"
-    """
-    text = str(text)
-    # Regex to find numbers
-    # Matches "Заявка: (digits)" and "Остаток: (digits)"
-    match = re.search(r"Заявка:\s*(\d+)\s*\|\s*Остаток:\s*(\d+)", text)
-    if match:
-        if kind == 'req':
-            return match.group(1)
-        elif kind == 'rem':
-            return match.group(2)
-    return text if kind == 'req' else ""  # Fallback: return whole text in Request col if format doesn't match
+    if apt_data:
+        for row in apt_data:
+            ws2.append([
+                row['id'],
+                row['created_at'],
+                row['user_name'],
+                row['district'],
+                row['road'],
+                row['lpu'],  # Название аптеки
+                row['prep_name'],  # Имя препарата из связанной таблицы
+                row['req_qty'],  # Число (float/int)
+                row['rem_qty'],  # Число (float/int)
+                row['commentary']
+            ])
 
+    # ==========================================
+    # 🎨 ОФОРМЛЕНИЕ (АВТО-ШИРИНА)
+    # ==========================================
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
 
-def create_excel_report(doc_data: list, apt_data: list) -> BytesIO:
-    output = BytesIO()
+    for ws in wb.worksheets:
+        # Красим заголовки
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
 
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Авто-подбор ширины столбцов (FIXED ERROR)
+        for col in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(col[0].column)
 
-        # =========================================================
-        # 1. DOCTORS SHEET
-        # =========================================================
-        if doc_data:
-            df = pd.DataFrame(doc_data)
+            for cell in col:
+                try:
+                    # 🔥 ГЛАВНОЕ ИСПРАВЛЕНИЕ:
+                    # Мы принудительно делаем str(cell.value),
+                    # чтобы len() не падал на числах (float/int)
+                    if cell.value:
+                        cell_len = len(str(cell.value))
+                        if cell_len > max_length:
+                            max_length = cell_len
+                except:
+                    pass
 
-            static_cols = [
-                'id', 'date', 'user', 'district', 'road', 'lpu',
-                'doc_name', 'doc_spec', 'doc_num', 'term', 'commentary'
-            ]
-            agg_rules = {col: 'first' for col in static_cols if col in df.columns}
-            df_grouped = df.groupby('id').agg(agg_rules)
-            
-            # Combine Preps
-            df_grouped['prep'] = df.groupby('id')['prep'].apply(
-                lambda x: '\n'.join([str(s) for s in x if s])
-            )
+            # Немного запаса ширины
+            adjusted_width = (max_length + 2)
+            # Ограничиваем, чтобы колонка не стала гигантской (макс 50 символов)
+            if adjusted_width > 50:
+                adjusted_width = 50
 
-            df_grouped = df_grouped.reset_index(drop=True)
-            df_grouped.rename(columns={
-                'id': 'ID', 'date': 'Дата', 'user': 'Сотрудник',
-                'district': 'Район', 'road': 'Маршрут', 'lpu': 'ЛПУ',
-                'doc_name': 'Врач', 'doc_spec': 'Спец', 'doc_num': 'Телефон',
-                'term': 'Условия', 'commentary': 'Комментарий', 'prep': 'Препараты'
-            }, inplace=True)
+            ws.column_dimensions[column_letter].width = adjusted_width
 
-            sheet_name = 'Врачи'
-            df_grouped.to_excel(writer, sheet_name=sheet_name, index=False)
-
-            adjust_column_widths(
-                writer.sheets[sheet_name],
-                df_grouped,
-                wrap_cols=['Препараты', 'Комментарий', 'Условия']
-            )
-
-        else:
-            pd.DataFrame({'Info': ['Нет данных']}).to_excel(writer, sheet_name='Врачи')
-
-        # =========================================================
-        # 2. PHARMACIES SHEET (Split Columns)
-        # =========================================================
-        if apt_data:
-            df = pd.DataFrame(apt_data)
-
-            # We can simply use the columns directly now
-            # 'request' and 'remaining' come straight from SQL
-
-            static_cols = ['id', 'date', 'user', 'district', 'road', 'lpu_name', 'commentary']
-            agg_rules = {col: 'first' for col in static_cols if col in df.columns}
-            df_grouped = df.groupby('id').agg(agg_rules)
-
-            # Aggregate the 3 columns separately
-            df_grouped['prep_name'] = df.groupby('id')['prep'].apply(
-                lambda x: '\n'.join([str(s) for s in x if s])
-            )
-            df_grouped['req_qty'] = df.groupby('id')['request'].apply(
-                lambda x: '\n'.join([str(s) if s and str(s).lower() != 'none' else "0" for s in x])
-            )
-            df_grouped['rem_qty'] = df.groupby('id')['remaining'].apply(
-                lambda x: '\n'.join([str(s) if s and str(s).lower() != 'none' else "0" for s in x])
-            )
-
-            df_grouped = df_grouped.reset_index(drop=True)
-
-            df_grouped.rename(columns={
-                'id': 'ID', 'date': 'Дата', 'user': 'Сотрудник',
-                'district': 'Район', 'road': 'Маршрут', 'lpu_name': 'Аптека',
-                'commentary': 'Комментарий',
-                'prep_name': 'Препарат',
-                'req_qty': 'Заявка',
-                'rem_qty': 'Остаток'
-            }, inplace=True)
-
-            # 5. WRITE
-            sheet_name = 'Аптеки'
-            df_grouped.to_excel(writer, sheet_name=sheet_name, index=False)
-
-            # 6. STYLE
-            adjust_column_widths(
-                writer.sheets[sheet_name],
-                df_grouped,
-                wrap_cols=['Препарат', 'Заявка', 'Остаток', 'Комментарий']
-            )
-
-        else:
-            pd.DataFrame({'Info': ['Нет данных']}).to_excel(writer, sheet_name='Аптеки')
-
+    # ==========================================
+    # 💾 СОХРАНЕНИЕ В ПАМЯТЬ
+    # ==========================================
+    output = io.BytesIO()
+    wb.save(output)
     output.seek(0)
+
     return output

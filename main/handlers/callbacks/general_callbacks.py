@@ -136,7 +136,7 @@ async def process_district(callback: types.CallbackQuery, state: FSMContext, pha
     # Получаем имя района из кэша (если есть) или заглушку
     # Для улучшения: можно сделать fetch имени из БД, но это +1 запрос.
     # Пока оставим как есть, TempData должна работать.
-    name = await TempDataManager.get_button_name(state, callback.data) or "Район"
+    name = await TempDataManager.get_button_name(state, callback.data)
 
     raw_id = callback.data.split("_")[-1]
 

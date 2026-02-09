@@ -1,30 +1,24 @@
-from aiogram import Router, F, types, Bot
+from aiogram import Router, F, types
 from aiogram.types import BufferedInputFile, CallbackQuery
-from datetime import datetime
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from datetime import datetime, timedelta
 
-# 1. Импортируем классы для типов
+# 1. Импорты баз данных (Типы)
 from db.database import BotDB
 from db.reports import ReportRepository
 
-# 2. Импорт конфига (для проверки админов, если нужно)
-from utils.config.settings import config
+# 2. Утилиты и логирование
 from utils.report.excel_generator import create_excel_report
 from utils.logger.logger_config import logger
 
-# 3. Импорт клавиатур
-from keyboard.inline.admin_kb import get_admin_menu
+# 3. Клавиатуры и состояния
+from keyboard.inline.admin_kb import get_admin_menu, get_report_period_kb, get_report_users_kb
 from keyboard.inline.menu_kb import get_main_menu_inline
+from states.admin.report_states import AdminReportFSM
 
 router = Router()
-
-
-# Простейший фильтр: этот роутер работает только для админов
-# (Можно раскомментировать, если хочешь жесткой безопасности)
-# router.message.filter(F.from_user.id.in_(config.admin_ids))
-# router.callback_query.filter(F.from_user.id.in_(config.admin_ids))
 
 
 class AdminTaskFSM(StatesGroup):
@@ -42,111 +36,164 @@ async def admin_start_task(callback: types.CallbackQuery, state: FSMContext):
 
 
 @router.message(AdminTaskFSM.waiting_for_task_text)
-async def admin_save_task(
-        message: types.Message,
-        state: FSMContext,
-        reports_db: ReportRepository  # <-- Внедряем базу отчетов
-):
+async def admin_save_task(message: types.Message, state: FSMContext, reports_db: ReportRepository):
     text = message.text
 
-    # Сохраняем в БД через переданный объект
+    # Используем reports_db из аргументов
     await reports_db.add_task(text)
 
-    await message.answer(f"✅ Задача опубликована:\n\n<i>{text}</i>")
+    await message.answer(f"✅ Задача опубликована:\n\n<i>{text}</i>", reply_markup=get_admin_menu())
     await state.clear()
 
 
 # ============================================================
-# 📊 ADMIN: EXPORT EXCEL
+# 📊 EXPORT FLOW (ВЫГРУЗКА ОТЧЕТОВ)
 # ============================================================
-@router.callback_query(F.data == "admin_export_xlsx")
-async def admin_export_reports(
-        callback: types.CallbackQuery,
-        reports_db: ReportRepository  # <-- Внедряем базу отчетов
-):
-    """Generates and sends the full Excel report to the admin."""
+
+# 1. Старт: Выбор периода
+@router.callback_query(F.data == "admin_export_start")
+async def start_export_flow(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminReportFSM.choose_period)
+    await callback.message.edit_text(
+        "📊 <b>Выгрузка отчетов</b>\n\nВыберите период:",
+        reply_markup=get_report_period_kb()
+    )
+    await callback.answer()
+
+
+# 2. Обработка выбора периода -> Выбор сотрудника
+@router.callback_query(AdminReportFSM.choose_period, F.data.startswith("period_"))
+async def process_period(callback: types.CallbackQuery, state: FSMContext, accountant_db: BotDB):
+    mode = callback.data.split("_")[1]
+
+    today = datetime.now().date()
+    start_date = today
+    end_date = today
+
+    if mode == "today":
+        start_date = today
+        end_date = today
+    elif mode == "yesterday":
+        start_date = today - timedelta(days=1)
+        end_date = start_date
+    elif mode == "week":
+        start_date = today - timedelta(days=today.weekday())  # Понедельник
+        end_date = today
+    elif mode == "month":
+        start_date = today.replace(day=1)
+        end_date = today
+
+    # Сохраняем даты
+    await state.update_data(start_date=str(start_date), end_date=str(end_date))
+
+    # Переходим к выбору сотрудника
+    await state.set_state(AdminReportFSM.choose_employee)
+
+    # Получаем список сотрудников через accountant_db
+    users = await accountant_db.get_user_list()
 
     await callback.message.edit_text(
-        "⏳ <b>Формирую таблицу...</b>\nПожалуйста, подождите, это может занять несколько секунд."
+        f"✅ Период: <b>{start_date} — {end_date}</b>\n\nТеперь выберите сотрудника:",
+        reply_markup=get_report_users_kb(users)
+    )
+    await callback.answer()
+
+
+# 3. Обработка выбора сотрудника -> ГЕНЕРАЦИЯ EXCEL
+@router.callback_query(AdminReportFSM.choose_employee, F.data.startswith("user_filter_"))
+async def process_user_and_generate(
+        callback: types.CallbackQuery,
+        state: FSMContext,
+        reports_db: ReportRepository
+):
+    selected_user = callback.data.split("user_filter_")[1]  # 'all' или 'Ivan'
+
+    data = await state.get_data()
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+
+    await callback.message.edit_text(
+        f"⏳ <b>Формирую отчет...</b>\n"
+        f"📅 {start_date} — {end_date}\n"
+        f"👤 Сотрудник: {selected_user}\n"
+        "Пожалуйста, подождите."
     )
 
     try:
-        # 2. Fetch All Data (Doctors + Pharmacies)
-        # Используем reports_db вместо глобальной переменной
-        doc_data = await reports_db.fetch_all_doctor_data()
-        apt_data = await reports_db.fetch_all_apothecary_data()
+        # Используем reports_db для получения данных
+        doc_data = await reports_db.fetch_filtered_doctor_data(start_date, end_date, selected_user)
+        apt_data = await reports_db.fetch_filtered_apothecary_data(start_date, end_date, selected_user)
 
         if not doc_data and not apt_data:
             await callback.message.edit_text(
-                "❌ <b>База данных пуста.</b>\nНет отчетов для экспорта.",
+                "❌ <b>За выбранный период данных нет.</b>",
                 reply_markup=get_admin_menu()
             )
+            await state.clear()
             return
 
-        # 3. Generate Excel File (in memory)
-        # Эта функция синхронная (CPU-bound), по-хорошему её бы в executor засунуть,
-        # но для начала пойдет и так.
+        # Генерация Excel
         excel_file = create_excel_report(doc_data, apt_data)
 
-        # 4. Prepare Filename
-        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        filename = f"Full_Report_{date_str}.xlsx"
+        # Имя файла
+        filename = f"Report_{start_date}_to_{end_date}.xlsx"
+        if selected_user != "all":
+            filename = f"Report_{selected_user}_{start_date}.xlsx"
 
-        # 5. Send the File
-        # Важно: excel_file.read() вернет байты
         file_to_send = BufferedInputFile(excel_file.read(), filename=filename)
 
         await callback.message.answer_document(
             document=file_to_send,
-            caption=f"📊 <b>Сводный отчет (Excel)</b>\n📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            caption=(
+                f"📊 <b>Готовый отчет</b>\n"
+                f"📅 Период: {start_date} — {end_date}\n"
+                f"👤 Фильтр: {selected_user}"
+            )
         )
 
-        # 6. Restore Admin Menu
-        await callback.message.answer("Главное меню администратора:", reply_markup=get_admin_menu())
-
-        # Delete the "Processing..." message
-        with DeprecationWarning:  # Просто чтобы подавить warning, можно просто удалить
-            try:
-                await callback.message.delete()
-            except:
-                pass
+        # Возврат в меню
+        await callback.message.answer("Админ-панель:", reply_markup=get_admin_menu())
+        # Удаляем сообщение "Формирую..."
+        try:
+            await callback.message.delete()
+        except:
+            pass
 
     except Exception as e:
         logger.error(f"Export Error: {e}")
-        await callback.message.answer(f"❌ <b>Ошибка при создании отчета:</b>\n{e}", reply_markup=get_admin_menu())
+        await callback.message.answer(f"❌ Ошибка при экспорте: {e}", reply_markup=get_admin_menu())
 
-    await callback.answer()
+    await state.clear()
+
+
+# Отмена действий админа
+@router.callback_query(F.data == "admin_cancel")
+async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("⚙️ Админ панель", reply_markup=get_admin_menu())
 
 
 # ============================================================
 # 👥 СПИСОК НОВЫХ ЗАЯВОК (Pending Users)
 # ============================================================
 @router.callback_query(F.data == "admin_users_list")
-async def show_pending_users(
-        callback: CallbackQuery,
-        accountant_db: BotDB  # <-- Внедряем базу пользователей
-):
-    # 1. Получаем список из БД
+async def show_pending_users(callback: CallbackQuery, accountant_db: BotDB):
+    # Используем accountant_db
     pending_users = await accountant_db.get_pending_users()
 
     if not pending_users:
         await callback.answer("✅ Новых заявок нет.", show_alert=True)
         return
 
-    # 2. Строим список кнопок
     builder = InlineKeyboardBuilder()
-
     text = "👤 <b>Заявки на регистрацию:</b>\n\n"
 
     for user in pending_users:
-        # Доступ через словарь (aiosqlite.Row ведет себя как словарь)
         u_id = user['user_id']
         name = user['user_name']
         region = user['region']
-
         text += f"▪️ {name} ({region})\n"
 
-        # Кнопки ДА/НЕТ для каждого юзера
         builder.button(text=f"✅ {name}", callback_data=f"decision_approve_{u_id}")
         builder.button(text="❌ Откл.", callback_data=f"decision_reject_{u_id}")
 
@@ -163,24 +210,25 @@ async def show_pending_users(
 @router.callback_query(F.data.startswith("decision_"))
 async def process_user_decision(
         callback: CallbackQuery,
-        accountant_db: BotDB,  # База юзеров (чтобы апрувить)
-        reports_db: ReportRepository  # База отчетов (чтобы сгенерить меню для юзера)
+        accountant_db: BotDB,
+        reports_db: ReportRepository
 ):
     try:
-        _, action, user_id_str = callback.data.split("_")
+        # decision_approve_12345
+        action, user_id_str = callback.data.split("_")[1], callback.data.split("_")[2]
         target_user_id = int(user_id_str)
-    except ValueError:
-        await callback.answer("Ошибка данных кнопки")
+    except Exception:
+        await callback.answer("Ошибка данных")
         return
 
     if action == "approve":
-        # 1. Обновляем статус в БД
+        # 1. Обновляем статус
         await accountant_db.approve_user(target_user_id)
         await callback.answer("✅ Пользователь допущен!")
 
-        # 2. Уведомляем ПОЛЬЗОВАТЕЛЯ
+        # 2. Уведомляем пользователя
         try:
-            # ⚠️ ВАЖНО: Передаем reports_db, так как меню теперь показывает задачи!
+            # ⚠️ ВАЖНО: передаем reports_db, так как меню проверяет задачи
             user_kb = await get_main_menu_inline(target_user_id, reports_db)
 
             await callback.bot.send_message(
@@ -188,20 +236,17 @@ async def process_user_decision(
                 "🎉 <b>Ваш аккаунт подтвержден!</b>\nДобро пожаловать в систему.",
                 reply_markup=user_kb
             )
-
-            # Обновляем админское меню
-            await callback.message.answer(f"✅ Пользователь {target_user_id} оповещен.", reply_markup=get_admin_menu())
-
+            await callback.message.answer(f"✅ Пользователь {target_user_id} уведомлен.", reply_markup=get_admin_menu())
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление юзеру {target_user_id}: {e}")
-            await callback.message.answer("✅ Допущен, но уведомление не отправлено (бот заблокирован?)")
+            await callback.message.answer("⚠️ Пользователь одобрен, но личное сообщение не отправлено.")
 
     elif action == "reject":
-        # 1. Удаляем из БД
+        # 1. Удаляем
         await accountant_db.delete_user(target_user_id)
         await callback.answer("❌ Заявка отклонена.")
 
-        # 2. Уведомляем пользователя
+        # 2. Уведомляем
         try:
             await callback.bot.send_message(
                 target_user_id,
@@ -210,6 +255,5 @@ async def process_user_decision(
         except:
             pass
 
-    # Обновляем список (рекурсивно вызываем функцию показа)
-    # Передаем accountant_db явно, так как мы вызываем функцию вручную
+    # Обновляем список (рекурсия)
     await show_pending_users(callback, accountant_db)
