@@ -2,73 +2,61 @@ from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
-# Импортируем классы для аннотации типов
+# --- SENIOR IMPORTS ---
+from infrastructure.database.db_helper import db_helper
+from infrastructure.database.repo.user_repo import UserRepository
+# ----------------------
+
 from db.database import BotDB
 from db.reports import ReportRepository
-
-# Импорты ваших клавиатур и состояний
 from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
 router = Router()
 
 
-# ============================================================
-# 🏁 ENTRY POINT: /start
-# ============================================================
 @router.message(Command("start"))
 async def start_command(
         message: types.Message,
         state: FSMContext,
-        accountant_db: BotDB,  # <-- Внедряем базу пользователей
-        reports_db: ReportRepository  # <-- Внедряем базу отчетов (нужна для меню)
+        accountant_db: BotDB,  # Оставляем, чтобы не ломать DI из main.py
+        reports_db: ReportRepository
 ):
-    """
-    Проверяет статус пользователя.
-    Аргументы баз данных (accountant_db, reports_db) попадают сюда автоматически из main.py
-    """
     user_id = message.from_user.id
-
-    # 1. Очищаем старые состояния во избежание багов
     await state.clear()
 
-    # 2. Проверяем статус пользователя в БД
-    # Метод должен возвращать:
-    # True  - если одобрен
-    # False - если есть в базе, но не одобрен (0)
-    # None  - если вообще нет в базе
+    # --- SENIOR LOGIC START ---
+    # Открываем сессию специально для этого запроса
+    # (В будущем это уйдет в Middleware)
+    async for session in db_helper.get_user_session():
+        repo = UserRepository(session)
+        user = await repo.get_user(user_id)
 
-    # Используем локальную переменную accountant_db вместо глобальной
-    is_approved = await accountant_db.is_user_approved(user_id)
+        # Логика определения статуса
+        # Если юзера нет в базе ORM -> он гость
+        if not user:
+            await message.answer(
+                "👋 Приветствую! Это бот <b>AnovaPharm</b>.\n\n"
+                "Для начала работы необходимо зарегистрироваться и войти в систему.",
+                reply_markup=get_guest_menu_inline()
+            )
+            return
 
-    # --- СЦЕНАРИЙ 1: ПОЛЬЗОВАТЕЛЬ ОДОБРЕН ---
-    if is_approved is True:
-        # Получаем имя для приветствия
-        username = await accountant_db.get_active_username(user_id)
-        if not username:
-            username = message.from_user.first_name
+        # Если юзер есть, проверяем флаг is_approved
+        if user.is_approved:
+            # Получаем актуальное имя из базы
+            username = user.user_name or message.from_user.first_name
 
-        # ⚠️ ВАЖНОЕ ИЗМЕНЕНИЕ:
-        # Мы передаем reports_db в функцию меню, чтобы она могла посчитать задачи
-        kb = await get_main_menu_inline(user_id, reports_db)
-
-        await message.answer(
-            f"👋 С возвращением, <b>{username}</b>!\n\n"
-            "Выберите раздел в меню ниже:",
-            reply_markup=kb
-        )
-
-    # --- СЦЕНАРИЙ 2: ЖДЕТ ПОДТВЕРЖДЕНИЯ ---
-    elif is_approved is False:
-        await message.answer(
-            "⏳ <b>Ваш аккаунт ожидает проверки.</b>\n\n"
-            "Администратор еще не подтвердил вашу регистрацию.\n"
-            "Как только доступ будет открыт, вы получите уведомление."
-        )
-
-    # --- СЦЕНАРИЙ 3: НЕ ЗАРЕГИСТРИРОВАН ---
-    else:
-        await message.answer(
-            "👋 Приветствую! Это бот <b>AnovaPharm</b>.\n\n"
-            "Для начала работы необходимо зарегистрироваться и войти в систему.",
-            reply_markup=get_guest_menu_inline()
-        )
+            kb = await get_main_menu_inline(user_id, reports_db)
+            await message.answer(
+                f"👋 С возвращением, <b>{username}</b>!\n\n"
+                "Выберите раздел в меню ниже:",
+                reply_markup=kb
+            )
+        else:
+            # Юзер есть, но не одобрен
+            await message.answer(
+                "⏳ <b>Ваш аккаунт ожидает проверки.</b>\n\n"
+                "Администратор еще не подтвердил вашу регистрацию.\n"
+                "Как только доступ будет открыт, вы получите уведомление."
+            )
+    # --- SENIOR LOGIC END ---

@@ -2,18 +2,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Импортируем только класс для подсказки типов
-from db.database import BotDB
-
 from utils.text.text_utils import shorten_name
 from storage.temp_data import TempDataManager
 
 # Константы
-PAGE_SIZE = 10
+PAGE_SIZE = 6  # Сделал 6, чтобы не забивать экран, но можно вернуть 10
 
 
 # ================================================================
-# 🔥 УНИВЕРСАЛЬНЫЙ СТРОИТЕЛЬ (Helper)
+# 🔥 УНИВЕРСАЛЬНЫЙ СТРОИТЕЛЬ (Helper - Senior Version)
 # ================================================================
 async def build_keyboard_from_items(
         items: list,
@@ -24,67 +21,84 @@ async def build_keyboard_from_items(
         add_new_btn_callback: str = None
 ) -> InlineKeyboardMarkup:
     """
-    Строит клавиатуру из списка объектов (dict или aiosqlite.Row).
+    Строит клавиатуру из списка.
+    Поддерживает и Словари (dict), и Объекты SQLAlchemy (class).
     """
     builder = InlineKeyboardBuilder()
 
     for item in items:
-        # Пытаемся достать ID и Name универсально
         try:
-            item_id = item['id']
+            # 1. ID
+            item_id = getattr(item, 'id', None)
+            if item_id is None:
+                # У модели Road первичный ключ road_id
+                item_id = getattr(item, 'road_id', None)
 
-            # Проверяем все возможные варианты ключей (для совместимости)
-            if 'name' in item.keys():
-                text = item['name']
-            elif 'doctor' in item.keys():
-                text = item['doctor']
-            elif 'pharmacy_name' in item.keys():
-                text = item['pharmacy_name']
-            elif 'spec' in item.keys():
-                text = item['spec']
-            elif 'prep' in item.keys():
-                text = item['prep']
-            else:
-                text = str(item_id)  # Fallback
+            if item_id is None and isinstance(item, dict):
+                item_id = item.get('id') or item.get('road_id')
 
-            # Формируем callback
+            if item_id is None:
+                item_id = str(item)
+
+            # 2. TEXT (Название кнопки)
+            text = None
+
+            # --- СПЕЦИАЛЬНАЯ ПРОВЕРКА ДЛЯ МАРШРУТОВ (Road) ---
+            road_num = getattr(item, 'road_num', None) or (item.get('road_num') if isinstance(item, dict) else None)
+            if road_num:
+                text = f"Маршрут {road_num}"
+                item_id = road_num
+            # -------------------------------------------------
+
+            if not text:
+                # Список полей, где может лежать имя (если это не маршрут)
+                possible_keys = ['name', 'doctor', 'pharmacy_name', 'spec', 'prep', 'user_name']
+
+                for key in possible_keys:
+                    val = getattr(item, key, None)
+                    if val is None and isinstance(item, dict):
+                        val = item.get(key)
+
+                    if val:
+                        text = str(val)
+                        break
+
+            if not text:
+                text = str(item_id)  # Если совсем ничего не нашли, показываем ID
+
+            # 3. URL
+            url = getattr(item, 'url', None) or getattr(item, 'pharmacy_url', None)
+            if url is None and isinstance(item, dict):
+                url = item.get('url') or item.get('pharmacy_url')
+
+            # 4. Callback
             callback_data = f"{prefix}_{item_id}"
 
-            # 🔥 ГЛАВНОЕ ИСПРАВЛЕНИЕ: СОХРАНЯЕМ ИМЯ В STATE
-            # Это нужно, чтобы TempDataManager.get_button_name не возвращал None
+            # 5. Сохраняем в State
             if state:
+                # Важно: сохраняем чистое имя без "Маршрут ", если нужно для поиска в БД,
+                # но для отображения пользователю лучше с "Маршрут".
+                # Сохраним как есть на кнопке:
                 await TempDataManager.save_button(state, callback_data, text)
+                if url:
+                    await TempDataManager.set(state, f"url_{callback_data}", url)
 
-                # Если есть URL, сохраняем его тоже
-                if 'url' in item.keys() and item['url']:
-                    await TempDataManager.set(state, f"url_{callback_data}", item['url'])
+            # 6. Кнопка
+            display_text = shorten_name(text) if len(text) > 30 else text
+            builder.button(text=display_text, callback_data=callback_data)
 
-        except (TypeError, IndexError, AttributeError):
-            # Если это просто строка или число
-            item_id = str(item)
-            text = str(item)
-            callback_data = f"{prefix}_{item_id}"
-
-            # Сохраняем имя и для простых кнопок
-            if state:
-                await TempDataManager.save_button(state, callback_data, text)
-
-        # Обрезаем длинные имена
-        display_text = shorten_name(text) if len(text) > 30 else text
-
-        builder.button(text=display_text, callback_data=callback_data)
+        except Exception as e:
+            print(f"Error building button for item {item}: {e}")
+            continue
 
     builder.adjust(row_width)
 
-    # --- КНОПКИ УПРАВЛЕНИЯ ---
+    # --- ФУТЕР ---
     footer_row = []
-
     if add_new_btn_callback:
         footer_row.append(InlineKeyboardButton(text="➕ Добавить", callback_data=add_new_btn_callback))
-
     if add_back_btn:
         footer_row.append(InlineKeyboardButton(text="⬅️ В меню", callback_data="back_to_main"))
-
     if footer_row:
         builder.row(*footer_row)
 
@@ -92,7 +106,7 @@ async def build_keyboard_from_items(
 
 
 # ================================================================
-# === СТАТИЧНЫЕ МЕНЮ
+# === СТАТИЧНЫЕ МЕНЮ (Без изменений)
 # ================================================================
 
 def get_confirm_inline(mode=False) -> InlineKeyboardMarkup:
@@ -122,21 +136,26 @@ def get_reports_inline() -> InlineKeyboardMarkup:
 
 
 # ================================================================
-# === ДИНАМИЧЕСКИЕ МЕНЮ (С запросами к БД)
+# === ДИНАМИЧЕСКИЕ МЕНЮ (PURE VIEW LAYER)
 # ================================================================
 
-async def get_district_inline(pharmacy_db: BotDB, state: FSMContext, mode: str) -> InlineKeyboardMarkup:
-    items = await pharmacy_db.get_district_list()
-    return await build_keyboard_from_items(items, prefix=mode, state=state, row_width=2)
+# Больше нет аргумента pharmacy_db!
+# Мы принимаем готовый список items.
+
+async def get_district_inline(items: list, state: FSMContext, prefix: str = "district") -> InlineKeyboardMarkup:
+    """
+    prefix: "district" (Врачи) или "a_district" (Аптека)
+    """
+    return await build_keyboard_from_items(items, prefix=prefix, state=state, row_width=2)
 
 
-async def get_road_inline(pharmacy_db: BotDB, state: FSMContext, mode: str) -> InlineKeyboardMarkup:
-    items = await pharmacy_db.get_road_list()
-    return await build_keyboard_from_items(items, prefix=mode, state=state, row_width=3)
+async def get_road_inline(items: list, state: FSMContext, prefix: str = "road") -> InlineKeyboardMarkup:
+    """
+    prefix: "road" (Врачи) или "a_road" (Аптека)
+    """
+    return await build_keyboard_from_items(items, prefix=prefix, state=state, row_width=3)
 
-
-async def get_lpu_inline(pharmacy_db: BotDB, state: FSMContext, district, road) -> InlineKeyboardMarkup:
-    items = await pharmacy_db.get_lpu_list(district, road)
+async def get_lpu_inline(items: list, state: FSMContext) -> InlineKeyboardMarkup:
     return await build_keyboard_from_items(
         items,
         prefix="lpu",
@@ -146,8 +165,7 @@ async def get_lpu_inline(pharmacy_db: BotDB, state: FSMContext, district, road) 
     )
 
 
-async def get_apothecary_inline(pharmacy_db: BotDB, state: FSMContext, district, road) -> InlineKeyboardMarkup:
-    items = await pharmacy_db.get_apothecary_list(district, road)
+async def get_apothecary_inline(items: list, state: FSMContext) -> InlineKeyboardMarkup:
     return await build_keyboard_from_items(
         items,
         prefix="apothecary",
@@ -157,41 +175,54 @@ async def get_apothecary_inline(pharmacy_db: BotDB, state: FSMContext, district,
     )
 
 
-async def get_spec_inline(pharmacy_db: BotDB, state: FSMContext = None) -> InlineKeyboardMarkup:
-    items = await pharmacy_db.get_spec_list()
+async def get_spec_inline(items: list, state: FSMContext = None) -> InlineKeyboardMarkup:
     return await build_keyboard_from_items(items, prefix="main_spec", state=state, row_width=2)
 
 
-# 🔥 ВОТ ЭТА ФУНКЦИЯ, КОТОРАЯ ПОТЕРЯЛАСЬ 🔥
+# 🔥 ВРАЧИ (Теперь принимает список, а не БД)
 async def get_doctors_inline(
-        pharmacy_db: BotDB,
-        state: FSMContext,
-        lpu_id: int,
-        page: int = 1
+        doctors: list,
+        lpu_id: int,  # Нужен для callback пагинации
+        page: int = 1,
+        state: FSMContext = None
 ) -> InlineKeyboardMarkup:
     """
-    Генерирует список врачей с пагинацией.
+    Генерирует список врачей.
+    doctors: Полный список врачей (или уже обрезанный, но лучше полный для пагинации здесь)
     """
-    # 1. Получаем ВСЕХ врачей
-    all_doctors = await pharmacy_db.get_doctors(lpu_id)
 
-    # 2. Пагинация
+    # 1. Пагинация (на случай, если передали весь список)
+    # Если список короткий, срезы сработают корректно и не вызовут ошибку
     start_index = (page - 1) * PAGE_SIZE
     end_index = start_index + PAGE_SIZE
-    current_doctors = all_doctors[start_index:end_index]
+
+    # Если переданный список больше чем страница, режем его.
+    # Если уже обрезан, берем как есть.
+    if len(doctors) > PAGE_SIZE:
+        current_doctors = doctors[start_index:end_index]
+        has_next = end_index < len(doctors)
+    else:
+        current_doctors = doctors
+        has_next = False
 
     builder = InlineKeyboardBuilder()
 
-    # 3. Кнопки врачей
+    # 2. Кнопки
     for doc in current_doctors:
-        # Используем .get() для безопасности
-        d_name = doc.get('doctor') or doc.get('name') or "Unknown"
-        d_id = doc['id']
+        # Универсальный геттер (dict или object)
+        d_name = getattr(doc, 'doctor', None) or getattr(doc, 'name', None)
+        if d_name is None and isinstance(doc, dict):
+            d_name = doc.get('doctor') or doc.get('name')
 
-        # Формируем callback
+        d_name = d_name or "Unknown"
+
+        d_id = getattr(doc, 'id', None)
+        if d_id is None and isinstance(doc, dict):
+            d_id = doc.get('id')
+
         callback_data = f"doc_{d_id}"
 
-        # СОХРАНЯЕМ ИМЯ В STATE (чтобы потом показать в отчете)
+        # Сохраняем для кнопки "Назад/Инфо"
         if state:
             await TempDataManager.save_button(state, callback_data, d_name)
 
@@ -199,17 +230,18 @@ async def get_doctors_inline(
 
     builder.adjust(1)
 
-    # 4. Навигация
+    # 3. Навигация
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"docpage_{lpu_id}_{page - 1}"))
-    if end_index < len(all_doctors):
+
+    if has_next:
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"docpage_{lpu_id}_{page + 1}"))
 
     if nav_buttons:
         builder.row(*nav_buttons)
 
-    # 5. Футер
+    # 4. Футер
     builder.row(InlineKeyboardButton(text="➕ Добавить врача", callback_data="add_doc"))
     builder.row(InlineKeyboardButton(text="🔙 Меню", callback_data="back_to_main"))
 
