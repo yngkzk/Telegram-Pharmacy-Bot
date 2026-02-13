@@ -12,18 +12,17 @@ router = Router()
 # ============================================================
 # 👨‍⚕️ DOCTOR FLOW: 1. Contract Terms
 # ============================================================
-@router.message(PrescriptionFSM.contract_terms, F.text)
+@router.message(PrescriptionFSM.contract_terms)
 async def process_contract_terms(message: types.Message, state: FSMContext):
-    text = message.text.strip()
-    if len(text) < 2:
-        await message.answer("⚠️ Текст слишком короткий. Напишите подробнее.")
-        return
+    terms_text = message.text.strip()
 
-    await TempDataManager.set(state, key="term", value=text)
-    await state.set_state(PrescriptionFSM.doctor_comments)
+    # 🔥 ИСПРАВЛЕНИЕ 2: Сохраняем в правильный ключ "contract_terms"
+    await TempDataManager.set(state, "contract_terms", terms_text)
 
-    logger.info(f"User {message.from_user.id} set terms: {text}")
-    await message.answer(f"✅ Условие принято.\n\n✍️ <b>Напишите комментарий</b> (или отправьте '-', если нет):")
+    # Переходим к комментарию
+    await state.set_state(PrescriptionFSM.pharmacy_comments)  # Используем одно состояние для комментов
+    await message.answer(
+        "✍️ <b>Условия приняты.</b>\nТеперь напишите комментарий к визиту (или отправьте '-' если нет):")
 
 
 # ============================================================
@@ -59,44 +58,28 @@ async def process_remaining(message: types.Message, state: FSMContext):
 # ============================================================
 # 💬 COMMON: Comments (Handles both Doctor & Pharmacy)
 # ============================================================
-@router.message(PrescriptionFSM.doctor_comments, F.text)
-@router.message(PrescriptionFSM.pharmacy_comments, F.text)
+@router.message(PrescriptionFSM.pharmacy_comments)
 async def process_comments(message: types.Message, state: FSMContext):
-    text = message.text.strip()
+    comment_text = message.text.strip()
 
-    if text in ["-", ".", "нет"]:
-        text = "Без комментария"
+    if comment_text in ["-", "нет", "net", "."]:
+        comment_text = ""
 
-    await TempDataManager.set(state, key="comms", value=text)
+    await TempDataManager.set(state, "comms", comment_text)
+
+    # Показываем кнопку подтверждения
     await state.set_state(PrescriptionFSM.confirmation)
 
-    # --- GENERATE SUMMARY ---
+    # Генерируем красивое превью для проверки
     data = await TempDataManager.get_all(state)
-    prefix = data.get("prefix")
+    doc_name = data.get("doc_name", "Врач")
+    terms = data.get("contract_terms", "Нет")  # Проверяем, что тут сохранилось
 
-    summary = "📝 <b>Проверьте данные отчёта:</b>\n\n"
-
-    # Dynamic summary generation: Check if keys exist before adding them
-    if prefix == "doc":
-        summary += f"👨‍⚕️ <b>Врач:</b> {data.get('doc_name')}\n"
-
-        # Only add terms if they were actually set (not None)
-        if data.get('term'):
-            summary += f"📋 <b>Условия:</b> {data.get('term')}\n"
-
-    elif prefix == "apt":
-        summary += f"🏥 <b>Аптека:</b> {data.get('lpu_name')}\n"
-
-        # Only add quantity/remaining if set
-        if data.get('quantity'):
-            summary += f"🔢 <b>Заявка:</b> {data.get('quantity')}\n"
-        if data.get('remaining'):
-            summary += f"📦 <b>Остаток:</b> {data.get('remaining')}\n"
-
-    summary += f"💬 <b>Комментарий:</b> {text}\n"
-
-    await message.answer(summary)
     await message.answer(
-        "📌 Всё верно? Нажмите кнопку ниже, чтобы сохранить.",
-        reply_markup=inline_buttons.get_confirm_inline(mode=True)
+        f"📋 <b>Проверка данных:</b>\n"
+        f"👨‍⚕️ Врач: {doc_name}\n"
+        f"📝 Условия: {terms}\n"
+        f"💬 Комментарий: {comment_text}\n\n"
+        f"Всё верно?",
+        reply_markup=inline_buttons.get_confirm_inline()
     )

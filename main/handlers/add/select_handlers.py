@@ -10,6 +10,11 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from db.database import BotDB
 from db.reports import ReportRepository
 
+from infrastructure.database.db_helper import db_helper
+from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
+from infrastructure.database.repo.user_repo import UserRepository
+from db.reports import ReportRepository
+
 from storage.temp_data import TempDataManager
 from keyboard.inline.inline_select import build_multi_select_keyboard, get_prep_inline
 from keyboard.inline.inline_buttons import get_doctors_inline, get_confirm_inline
@@ -94,49 +99,57 @@ async def reset_selection(callback: types.CallbackQuery, state: FSMContext, phar
 # ============================================================
 # 🏥 ВЫБОР ЛПУ / АПТЕКИ
 # ============================================================
+
 @router.callback_query(F.data.startswith("lpu_"), PrescriptionFSM.choose_lpu)
-async def process_lpu_selection(callback: types.CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
-    """
-    Пользователь выбрал ЛПУ (больницу).
-    Теперь нужно показать список врачей.
-    """
-    lpu_id = int(callback.data.split("_")[-1])
+async def process_lpu_selection(callback: types.CallbackQuery, state: FSMContext):
+    # 1. 🔥 ЖЕСТКО БЕРЕМ ID ИЗ КНОПКИ (а не из памяти)
+    # Кнопка отправляет "lpu_1", "lpu_2" и т.д.
+    try:
+        raw_id = callback.data.split("_")[-1]  # Берем часть после подчеркивания
+        lpu_id = int(raw_id)
+    except ValueError:
+        await callback.answer("Ошибка ID ЛПУ", show_alert=True)
+        return
 
-    # Пытаемся достать имя из TempData (мы его сохраняли в build_keyboard)
-    # Если там нет - ничего страшного, покажем просто "ЛПУ"
-    # Для улучшения можно сделать fetch имени из БД, но это лишний запрос
-    lpu_name = "Выбранное ЛПУ"
-
+    # 2. Только ТЕПЕРЬ запоминаем этот выбор
     await TempDataManager.set(state, "lpu_id", lpu_id)
+
+    # Сохраняем имя для красоты (берем из кэша кнопок)
+    lpu_name = await TempDataManager.get_button_name(state, callback.data) or f"ЛПУ #{lpu_id}"
     await TempDataManager.set(state, "lpu_name", lpu_name)
 
+    # 4. Логика перехода к врачам
+    # Сначала определяем режим (Врач или Аптека)
     data = await TempDataManager.get_all(state)
-    prefix = data.get("prefix")
+    prefix = data.get("prefix") or "doc"
 
-    if not prefix:
-        prefix = "doc"
-        await TempDataManager.set(state, "prefix", "doc")
-
-    # --- ВРАЧ ---
     if prefix == "doc":
         await state.set_state(PrescriptionFSM.choose_doctor)
 
-        # Передаем pharmacy_db в генератор клавиатуры!
-        keyboard = await get_doctors_inline(pharmacy_db, state, lpu_id=lpu_id)
+        # Получаем врачей для ЭТОГО lpu_id
+        async for session in db_helper.get_pharmacy_session():
+            repo = PharmacyRepository(session)
+            doctors = await repo.get_doctors_by_lpu(lpu_id)
 
-        await callback.message.edit_text(
-            f"🏥 ЛПУ выбрано.\n👨‍⚕️ Выберите врача:",
-            reply_markup=keyboard
-        )
+            # 5. Генерируем клавиатуру
+            keyboard = await get_doctors_inline(
+                doctors=doctors,
+                lpu_id=lpu_id,
+                page=1,
+                state=state
+            )
 
-    # --- АПТЕКА ---
+            await callback.message.edit_text(
+                f"🏥 <b>{lpu_name}</b>\n👨‍⚕️ Выберите врача:",
+                reply_markup=keyboard
+            )
+
     elif prefix == "apt":
-        await TempDataManager.set(state, "prefix", "apt")
-
+        # Логика аптеки...
         await state.set_state(PrescriptionFSM.choose_apothecary)
         await callback.message.edit_text(
-            f"🏥 ЛПУ выбрано.\n\nЕсть ли заявка на препараты?",
-            reply_markup=get_confirm_inline()  # Исправлено название функции
+            f"🏥 <b>{lpu_name}</b>\n\nЕсть ли заявка на препараты?",
+            reply_markup=get_confirm_inline()
         )
 
     await callback.answer()
@@ -362,18 +375,27 @@ async def process_pharmacy_comment(message: types.Message, state: FSMContext):
 # 📄 ПАГИНАЦИЯ ВРАЧЕЙ
 # ============================================================
 @router.callback_query(F.data.startswith("docpage_"))
-async def paginate_doctors(callback: types.CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
+async def paginate_doctors(callback: types.CallbackQuery, state: FSMContext):
     try:
         parts = callback.data.split("_")
         lpu_id = int(parts[1])
         page = int(parts[2])
 
-        # Передаем pharmacy_db!
-        keyboard = await get_doctors_inline(pharmacy_db, state, lpu_id=lpu_id, page=page)
+        async for session in db_helper.get_pharmacy_session():
+            repo = PharmacyRepository(session)
+            doctors = await repo.get_doctors_by_lpu(lpu_id)
 
-        with suppress(TelegramBadRequest):
-            await callback.message.edit_reply_markup(reply_markup=keyboard)
+            keyboard = await get_doctors_inline(
+                doctors=doctors,
+                lpu_id=lpu_id,
+                page=page,
+                state=state
+            )
+
+            with suppress(TelegramBadRequest):
+                await callback.message.edit_reply_markup(reply_markup=keyboard)
 
     except Exception as e:
         logger.error(f"Pagination error: {e}")
+
     await callback.answer()

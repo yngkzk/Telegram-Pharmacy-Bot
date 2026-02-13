@@ -145,15 +145,15 @@ class BotDB:
         real_spec_id = None
 
         if str(spec_input).isdigit():
-            main_spec_id = int(spec_input)
-            row = await self._fetchone("SELECT spec_id FROM specs WHERE ms_id = ?", (main_spec_id,))
+            id = int(spec_input)
+            row = await self._fetchone("SELECT spec_id FROM specs WHERE ms_id = ?", (id,))
             if row:
                 real_spec_id = row['spec_id']
             else:
-                ms_row = await self._fetchone("SELECT spec FROM main_specs WHERE main_spec_id = ?", (main_spec_id,))
+                ms_row = await self._fetchone("SELECT spec FROM main_specs WHERE main_spec_id = ?", (id,))
                 if ms_row:
                     spec_name = ms_row['spec']
-                    async with self.conn.execute("INSERT INTO specs (ms_id, spec) VALUES (?, ?)", (main_spec_id, spec_name)) as cursor:
+                    async with self.conn.execute("INSERT INTO specs (ms_id, spec) VALUES (?, ?)", (id, spec_name)) as cursor:
                         real_spec_id = cursor.lastrowid
                     await self.conn.commit()
         else:

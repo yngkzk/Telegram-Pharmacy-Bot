@@ -38,9 +38,24 @@ class Doctor(Base):
 
     lpu = relationship("LPU")
 
+class MainSpec(Base):
+    __tablename__ = "main_specs"
+    id = Column(Integer, primary_key=True)
+    spec = Column(String)
+
 
 class Medication(Base):
     __tablename__ = "medication"
 
     id = Column(Integer, primary_key=True)
     prep = Column(String)
+
+
+class Apothecary(Base):
+    __tablename__ = "apothecary"
+
+    # В твоей базе поля: id, road_id, name, url
+    id = Column(Integer, primary_key=True)
+    road_id = Column(Integer, ForeignKey("roads.road_id"))
+    name = Column(String)
+    url = Column(String)
