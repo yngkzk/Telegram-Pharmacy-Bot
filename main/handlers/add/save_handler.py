@@ -38,8 +38,8 @@ async def final_save_report(
 
     async for u_session in db_helper.get_user_session():
         user = await UserRepository(u_session).get_user(user_id)
-        if user and user.name:
-            real_name = user.name
+        if user and user.user_name:
+            real_name = user.user_name
 
     # 2. Достаем все данные
     data = await TempDataManager.get_all(state)
