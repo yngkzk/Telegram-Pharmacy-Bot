@@ -190,7 +190,7 @@ class BotDB:
             SELECT ms.spec, d.numb
             FROM doctors d
             JOIN specs s ON d.spec_id = s.spec_id
-            JOIN main_specs ms ON s.ms_id = ms.main_spec_id
+            JOIN main_specs ms ON s.ms_id = ms.id
             WHERE d.id = ?
         """, (doc_id,))
         return dict(row) if row else None
