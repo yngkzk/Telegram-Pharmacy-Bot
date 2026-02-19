@@ -72,7 +72,7 @@ class ReportRepository:
         await self.conn.executemany("INSERT INTO detailed_report (report_id, prep) VALUES (?, ?)", data)
         await self.conn.commit()
 
-    async def save_apothecary_report(self, user, district, road, lpu, comment):
+    async def save_apothecary_report(self, user, district, road, apothecary, comment):
         self._ensure_conn()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -80,7 +80,7 @@ class ReportRepository:
             INSERT INTO apothecary_report (
                 user, district, road, apothecary, commentary, date
             ) VALUES (?, ?, ?, ?, ?, ?)
-        """, (user, district, road, lpu, comment, current_time))
+        """, (user, district, road, apothecary, comment, current_time))
         await self.conn.commit()
         return cursor.lastrowid
 

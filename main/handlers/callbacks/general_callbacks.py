@@ -289,11 +289,34 @@ async def process_doctor(
         await TempDataManager.set(state, "doc_name", doc_name)
 
         # Спец и номер
-        if doctor.spec_id:
-            spec_name = await repo.get_spec_name(doctor.spec_id)
-            await TempDataManager.set(state, "doc_spec", spec_name)
+        # =========================================================
+        # 🕵️‍♂️ ДЕБАГ: Смотрим, что реально пришло из базы
+        # =========================================================
+        print(f"👉 ДЕБАГ ВРАЧА: {doctor.doctor if hasattr(doctor, 'doctor') else 'Имя неизвестно'}")
+        print(f"👉 Атрибут spec_id: {getattr(doctor, 'spec_id', 'Вообще нет такого поля!')}")
+        print(f"👉 Атрибут main_spec_id: {getattr(doctor, 'main_spec_id', 'Вообще нет такого поля!')}")
+
+        # Пытаемся достать ID специальности любым доступным способом
+        actual_spec_id = getattr(doctor, 'spec_id', None)
+        if not actual_spec_id:
+            actual_spec_id = getattr(doctor, 'main_spec_id', None)  # Фоллбэк на старое название
+
+        # =========================================================
+        # 🛡️ БРОНИРОВАННОЕ СОХРАНЕНИЕ
+        # =========================================================
+        if actual_spec_id:
+            try:
+                spec_name = await repo.get_spec_name(actual_spec_id)
+                if not spec_name:
+                    spec_name = "Не указана"
+                await TempDataManager.set(state, "doc_spec", spec_name)
+            except Exception as e:
+                print(f"❌ Ошибка при поиске специальности: {e}")
+                await TempDataManager.set(state, "doc_spec", "Не указана")
         else:
-            await TempDataManager.set(state, "doc_spec", "Не указано")
+            # Если реально пусто (NULL в базе) или поле не найдено
+            print("⚠️ spec_id пустой, сохраняем 'Не указана'")
+            await TempDataManager.set(state, "doc_spec", "Не указана")
 
         await TempDataManager.set(state, "doc_num", doctor.numb)
 

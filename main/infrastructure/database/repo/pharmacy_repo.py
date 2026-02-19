@@ -59,18 +59,22 @@ class PharmacyRepository:
 
     async def get_spec_name(self, spec_id: int) -> str:
         """
-        🔥 ЭТОГО ТОЖЕ НЕ БЫЛО
-        Получает название специальности.
+        Получает название специальности напрямую из main_specs.
         """
+        if not spec_id:
+            return "Не указана"
+
         sql = """
-            SELECT ms.spec 
-            FROM specs s
-            JOIN main_specs ms ON s.ms_id = ms.main_spec_id
-            WHERE s.spec_id = :sid
+            SELECT spec 
+            FROM main_specs 
+            WHERE id = :sid
         """
+        # Если у тебя колонка всё еще называется main_spec_id, то WHERE main_spec_id = :sid
+
         result = await self.session.execute(text(sql), {"sid": spec_id})
         row = result.fetchone()
-        return row[0] if row else "Не указано"
+
+        return row[0] if row else "Не указана"
 
     async def get_preps(self) -> List[Medication]:
         stmt = select(Medication).order_by(Medication.prep)

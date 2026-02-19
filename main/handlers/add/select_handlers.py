@@ -1,76 +1,237 @@
 from contextlib import suppress
-from typing import List, Tuple
-
 from aiogram import Router, types, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Импортируем классы для типов
-from db.database import BotDB
-from db.reports import ReportRepository
-
+# Импорты БД
 from infrastructure.database.db_helper import db_helper
 from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
-from infrastructure.database.repo.user_repo import UserRepository
-from db.reports import ReportRepository
 
 from storage.temp_data import TempDataManager
-from keyboard.inline.inline_select import build_multi_select_keyboard, get_prep_inline
-from keyboard.inline.inline_buttons import get_doctors_inline, get_confirm_inline
-from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
+
+# 🔥 ИМПОРТЫ ТВОЕЙ СТАРОЙ КЛАВИАТУРЫ
+from keyboard.inline.inline_select import build_multi_select_keyboard
+
+# Импорты кнопок навигации
+from keyboard.inline.inline_buttons import (
+    get_road_inline,
+    get_lpu_inline,
+    get_apothecary_inline,
+    get_doctors_inline,
+    get_confirm_inline
+)
 
 router = Router()
 
 
 # ============================================================
-# 📥 ЗАГРУЗКА И КЭШИРОВАНИЕ ПРЕПАРАТОВ
+# 📥 ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ (Адаптация под SQLAlchemy)
 # ============================================================
-async def load_items(state: FSMContext, pharmacy_db: BotDB) -> List[Tuple[int, str]]:
+async def ensure_prep_items_loaded(state: FSMContext):
     """
-    Загружает список препаратов из БД или кэша состояния.
+    Загружает список препаратов в TempData для старой клавиатуры.
     """
     items = await TempDataManager.get(state, "prep_items")
-    if items is None:
-        # Используем переданный объект БД
-        raw_rows = await pharmacy_db.get_prep_list()
-        items = [(row["id"], row["prep"]) for row in raw_rows]
 
-        prep_map = {item_id: name for item_id, name in items}
-        await TempDataManager.set(state, "prep_items", items)
-        await TempDataManager.set(state, "prep_map", prep_map)
+    if items is None:
+        async for session in db_helper.get_pharmacy_session():
+            repo = PharmacyRepository(session)
+            all_preps = await repo.get_preps()
+
+            items = []
+            prep_map = {}
+
+            for p in all_preps:
+                p_id = getattr(p, 'id', None) or p.get('id')
+                p_name = getattr(p, 'prep', None) or getattr(p, 'name', None) or p.get('prep')
+
+                if p_id and p_name:
+                    items.append((p_id, p_name))
+                    prep_map[str(p_id)] = p_name
+                    prep_map[int(p_id)] = p_name
+
+            await TempDataManager.set(state, "prep_items", items)
+            await TempDataManager.set(state, "prep_map", prep_map)
+
     return items
 
 
 # ============================================================
-# ☑️ ПЕРЕКЛЮЧЕНИЕ ВЫБОРА (ЧЕКБОКСЫ)
+# 1. ВЫБОР РАЙОНА И МАРШРУТА
+# ============================================================
+@router.callback_query(F.data.startswith("district_"), PrescriptionFSM.picking_district)
+@router.callback_query(F.data.startswith("a_district_"), PrescriptionFSM.picking_district)
+async def process_district_selection(callback: types.CallbackQuery, state: FSMContext):
+    is_pharmacy = callback.data.startswith("a_district_")
+
+    try:
+        district_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        return await callback.answer("Ошибка ID")
+
+    await TempDataManager.set(state, "district_id", district_id)
+    district_name = await TempDataManager.get_button_name(state, callback.data) or "Район"
+    await TempDataManager.set(state, "district_name", district_name)
+
+    roads_data = [{"road_num": i} for i in range(1, 8)]
+    prefix = "a_road" if is_pharmacy else "road"
+    kb = await get_road_inline(roads_data, state, prefix=prefix)
+
+    await state.set_state(PrescriptionFSM.picking_road)
+    await callback.message.edit_text(
+        f"✅ Район: <b>{district_name}</b>\nВыберите маршрут:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.contains("road_"), PrescriptionFSM.picking_road)
+async def process_road_selection(callback: types.CallbackQuery, state: FSMContext):
+    is_pharmacy = callback.data.startswith("a_road_")
+    try:
+        road_num = int(callback.data.split("_")[-1])
+    except ValueError:
+        return await callback.answer("Ошибка маршрута")
+
+    await TempDataManager.set(state, "road_num", road_num)
+    prefix = "apt" if is_pharmacy else "doc"
+    await TempDataManager.set(state, "prefix", prefix)
+
+    district_id = await TempDataManager.get(state, "district_id")
+    district_name = await TempDataManager.get(state, "district_name")
+
+    async for session in db_helper.get_pharmacy_session():
+        repo = PharmacyRepository(session)
+        road_id = await repo.get_road_id_by_data(district_id, road_num)
+
+        if not road_id:
+            return await callback.answer("Маршрут не найден", show_alert=True)
+
+        await TempDataManager.set(state, "road_id", road_id)
+
+        if is_pharmacy:
+            await state.set_state(PrescriptionFSM.choose_apothecary)
+            items = await repo.get_apothecaries_by_road(road_id)
+            kb = await get_apothecary_inline(items, state)
+            title = "🏪 <b>Аптеки</b>"
+        else:
+            await state.set_state(PrescriptionFSM.choose_lpu)
+            items = await repo.get_lpus_by_road(road_id)
+            kb = await get_lpu_inline(items, state)
+            title = "🏥 <b>ЛПУ</b>"
+
+        await callback.message.edit_text(
+            f"✅ {district_name} | М{road_num}\n{title}\nВыберите объект:",
+            reply_markup=kb
+        )
+    await callback.answer()
+
+
+# ============================================================
+# 2. ВЫБОР ЛПУ (Врачи)
+# ============================================================
+@router.callback_query(F.data.startswith("lpu_"), PrescriptionFSM.choose_lpu)
+async def process_lpu_selection(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        lpu_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        return await callback.answer("Ошибка ID ЛПУ")
+
+    await TempDataManager.set(state, "lpu_id", lpu_id)
+    lpu_name = await TempDataManager.get_button_name(state, callback.data) or f"ЛПУ #{lpu_id}"
+    await TempDataManager.set(state, "lpu_name", lpu_name)
+
+    await state.set_state(PrescriptionFSM.choose_doctor)
+
+    async for session in db_helper.get_pharmacy_session():
+        repo = PharmacyRepository(session)
+        doctors = await repo.get_doctors_by_lpu(lpu_id)
+        keyboard = await get_doctors_inline(doctors, lpu_id=lpu_id, page=1, state=state)
+
+        await callback.message.edit_text(
+            f"🏥 <b>{lpu_name}</b>\n👨‍⚕️ Выберите врача:",
+            reply_markup=keyboard
+        )
+    await callback.answer()
+
+
+# ============================================================
+# 3. ВЫБОР АПТЕКИ -> ВОПРОС ПРО ЗАЯВКУ
+# ============================================================
+@router.callback_query(F.data.startswith("apothecary_"), PrescriptionFSM.choose_apothecary)
+async def process_apothecary_selection(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        apt_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        return await callback.answer("Ошибка ID Аптеки")
+
+    await TempDataManager.set(state, "lpu_id", apt_id)
+    apt_name = await TempDataManager.get_button_name(state, callback.data) or f"Аптека #{apt_id}"
+    await TempDataManager.set(state, "apt_name", apt_name)
+    await TempDataManager.set(state, "prefix", "apt")
+
+    # 🔥 ОСТАЕМСЯ В СОСТОЯНИИ choose_apothecary (ИСПРАВЛЕНИЕ КОЛЛИЗИИ)
+    await state.set_state(PrescriptionFSM.choose_apothecary)
+
+    await callback.message.edit_text(
+        f"🏪 <b>{apt_name}</b>\n\n📝 Есть ли заявка на препараты или остатки?",
+        reply_markup=get_confirm_inline(mode=False)
+    )
+    await callback.answer()
+
+
+# ============================================================
+# 4. ОБРАБОТКА "ЕСТЬ ЗАЯВКА" -> ЗАПУСК ТВОЕЙ КЛАВИАТУРЫ
+# ============================================================
+# 🔥 ЛОВИМ ОТВЕТ ИМЕННО В СОСТОЯНИИ choose_apothecary
+@router.callback_query(F.data.in_(["confirm_yes", "confirm_no"]), PrescriptionFSM.choose_apothecary)
+async def process_confirmation_step(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "confirm_no":
+        await state.set_state(PrescriptionFSM.pharmacy_comments)
+        await callback.message.edit_text("✍️ Напишите комментарий к визиту (или «-»):")
+        await callback.answer()
+        return
+
+    # Если ДА (Есть заявка)
+    items = await ensure_prep_items_loaded(state)
+    await TempDataManager.set(state, "selected_items", [])
+
+    # ВЫЗЫВАЕМ ТВОЮ РОДНУЮ КЛАВИАТУРУ
+    kb = build_multi_select_keyboard(items, [], "apt")
+
+    await state.set_state(PrescriptionFSM.choose_meds)
+
+    await callback.message.edit_text(
+        "💊 <b>Выберите препараты (можно несколько):</b>",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+# ============================================================
+# 5. ☑️ ТВОЙ СТАРЫЙ TOGGLE (Переключение галочек)
 # ============================================================
 @router.callback_query(F.data.startswith("select_"), PrescriptionFSM.choose_meds)
-async def toggle_selection(callback: types.CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
+async def toggle_selection(callback: types.CallbackQuery, state: FSMContext):
     try:
         _, prefix, option_id = callback.data.split("_")
         option_id = int(option_id)
     except ValueError:
-        await callback.answer("❌ Ошибка данных кнопки")
-        return
+        return await callback.answer("Ошибка данных кнопки")
 
-    # Передаем pharmacy_db в функцию загрузки
-    items = await load_items(state, pharmacy_db)
+    items = await TempDataManager.get(state, "prep_items")
+    if not items:
+        items = await ensure_prep_items_loaded(state)
 
-    selected = await TempDataManager.get(state, "selected_items", [])
+    selected = await TempDataManager.get(state, "selected_items") or []
 
     if option_id in selected:
         selected.remove(option_id)
     else:
         selected.append(option_id)
 
-    # Используем множество для удаления дублей (на всякий случай)
-    selected = list(set(selected))
-
     await TempDataManager.set(state, "selected_items", selected)
-
-    # Строим новую клавиатуру
     new_keyboard = build_multi_select_keyboard(items, selected, prefix)
 
     with suppress(TelegramBadRequest):
@@ -80,12 +241,12 @@ async def toggle_selection(callback: types.CallbackQuery, state: FSMContext, pha
 
 
 # ============================================================
-# 🔄 СБРОС ВЫБОРА
+# 6. СБРОС ВЫБОРА (RESET)
 # ============================================================
 @router.callback_query(F.data == "reset_selection", PrescriptionFSM.choose_meds)
-async def reset_selection(callback: types.CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
-    items = await load_items(state, pharmacy_db)
-    prefix = await TempDataManager.get(state, "prefix", "doc")
+async def reset_selection(callback: types.CallbackQuery, state: FSMContext):
+    items = await ensure_prep_items_loaded(state)
+    prefix = await TempDataManager.get(state, "prefix") or "doc"
 
     await TempDataManager.set(state, "selected_items", [])
     new_keyboard = build_multi_select_keyboard(items, [], prefix)
@@ -97,305 +258,187 @@ async def reset_selection(callback: types.CallbackQuery, state: FSMContext, phar
 
 
 # ============================================================
-# 🏥 ВЫБОР ЛПУ / АПТЕКИ
-# ============================================================
-
-@router.callback_query(F.data.startswith("lpu_"), PrescriptionFSM.choose_lpu)
-async def process_lpu_selection(callback: types.CallbackQuery, state: FSMContext):
-    # 1. 🔥 ЖЕСТКО БЕРЕМ ID ИЗ КНОПКИ (а не из памяти)
-    # Кнопка отправляет "lpu_1", "lpu_2" и т.д.
-    try:
-        raw_id = callback.data.split("_")[-1]  # Берем часть после подчеркивания
-        lpu_id = int(raw_id)
-    except ValueError:
-        await callback.answer("Ошибка ID ЛПУ", show_alert=True)
-        return
-
-    # 2. Только ТЕПЕРЬ запоминаем этот выбор
-    await TempDataManager.set(state, "lpu_id", lpu_id)
-
-    # Сохраняем имя для красоты (берем из кэша кнопок)
-    lpu_name = await TempDataManager.get_button_name(state, callback.data) or f"ЛПУ #{lpu_id}"
-    await TempDataManager.set(state, "lpu_name", lpu_name)
-
-    # 4. Логика перехода к врачам
-    # Сначала определяем режим (Врач или Аптека)
-    data = await TempDataManager.get_all(state)
-    prefix = data.get("prefix") or "doc"
-
-    if prefix == "doc":
-        await state.set_state(PrescriptionFSM.choose_doctor)
-
-        # Получаем врачей для ЭТОГО lpu_id
-        async for session in db_helper.get_pharmacy_session():
-            repo = PharmacyRepository(session)
-            doctors = await repo.get_doctors_by_lpu(lpu_id)
-
-            # 5. Генерируем клавиатуру
-            keyboard = await get_doctors_inline(
-                doctors=doctors,
-                lpu_id=lpu_id,
-                page=1,
-                state=state
-            )
-
-            await callback.message.edit_text(
-                f"🏥 <b>{lpu_name}</b>\n👨‍⚕️ Выберите врача:",
-                reply_markup=keyboard
-            )
-
-    elif prefix == "apt":
-        # Логика аптеки...
-        await state.set_state(PrescriptionFSM.choose_apothecary)
-        await callback.message.edit_text(
-            f"🏥 <b>{lpu_name}</b>\n\nЕсть ли заявка на препараты?",
-            reply_markup=get_confirm_inline()
-        )
-
-    await callback.answer()
-
-
-# ============================================================
-# 👨‍⚕️ ВЫБОР ВРАЧА
-# ============================================================
-@router.callback_query(F.data.startswith("doc_"), PrescriptionFSM.choose_doctor)
-async def process_doctor(
-        callback: types.CallbackQuery,
-        state: FSMContext,
-        pharmacy_db: BotDB,
-        reports_db: ReportRepository
-):
-    doc_id = int(callback.data.split("_")[-1])
-    user_name = callback.from_user.full_name  # Или из БД, если нужно точнее
-
-    # Получаем данные врача через объект БД
-    doc_name = await pharmacy_db.get_doctor_name(doc_id)
-
-    await TempDataManager.set(state, "doc_id", doc_id)
-    await TempDataManager.set(state, "doc_name", doc_name)
-
-    # Статистика врача
-    row = await pharmacy_db.get_doc_stats(doc_id)
-    if row:
-        await TempDataManager.set(state, "doc_spec", row["spec"])
-        await TempDataManager.set(state, "doc_num", row["numb"])
-    else:
-        await TempDataManager.set(state, "doc_spec", "Не указано")
-        await TempDataManager.set(state, "doc_num", None)
-
-    # Последний отчет (через reports_db)
-    # Нам нужно имя пользователя системы, а не Telegram Name
-    # Лучше брать из state, если мы его там храним при логине.
-    # Пока используем callback.from_user.username как заглушку или имя из БД
-    # В идеале: active_user = await accountant_db.get_active_username(...)
-    # Но для упрощения пока оставим user_name
-
-    last_report = await reports_db.get_last_doctor_report(user_name, doc_name)
-
-    report_text = ""
-    if last_report:
-        preps_str = "\n".join([f"• {p}" for p in last_report['preps']]) if last_report['preps'] else "—"
-        report_text = (
-            f"📅 <b>Предыдущий отчёт ({last_report['date']}):</b>\n"
-            f"📝 <b>Условия:</b> {last_report['term']}\n"
-            f"💊 <b>Препараты:</b>\n{preps_str}\n"
-            f"💬 <b>Комментарий:</b> {last_report['commentary']}\n"
-            f"➖➖➖➖➖➖➖➖➖➖\n\n"
-        )
-
-    await state.set_state(PrescriptionFSM.choose_meds)
-    await TempDataManager.set(state, "prefix", "doc")
-    await TempDataManager.set(state, "selected_items", [])
-
-    # Клавиатура препаратов (передаем pharmacy_db)
-    keyboard = await get_prep_inline(pharmacy_db, state, prefix="doc")
-
-    await callback.message.edit_text(
-        f"{report_text}👨‍⚕️ <b>{doc_name}</b>\n💊 Выберите препараты:",
-        reply_markup=keyboard
-    )
-    await callback.answer()
-
-
-# ============================================================
-# ✅ ПОДТВЕРЖДЕНИЕ ВЫБОРА
+# 7. ПОДТВЕРЖДЕНИЕ ВЫБОРА (Кнопка "Готово")
 # ============================================================
 @router.callback_query(F.data == "confirm_selection", PrescriptionFSM.choose_meds)
-async def confirm_selection(callback: types.CallbackQuery, state: FSMContext, pharmacy_db: BotDB):
-    selected_ids = await TempDataManager.get(state, "selected_items", [])
-
-    # Загружаем карту имен (на всякий случай обновляем)
-    await load_items(state, pharmacy_db)
-    prep_map = await TempDataManager.get(state, "prep_map", {})
+async def confirm_selection(callback: types.CallbackQuery, state: FSMContext):
+    selected_ids = await TempDataManager.get(state, "selected_items") or []
 
     if not selected_ids:
-        await callback.answer("⚠️ Вы ничего не выбрали!", show_alert=True)
-        return
+        return await callback.answer("⚠️ Выберите хотя бы один препарат!", show_alert=True)
 
-    prefix = await TempDataManager.get(state, "prefix")
-    logger.info(f"Selection confirmed: {selected_ids}")
+    data = await TempDataManager.get_all(state)
+    prefix = data.get("prefix")
 
     # --- ВРАЧ ---
     if prefix == "doc":
-        selected_names = []
-        for i in selected_ids:
-            # Приводим к int для поиска в словаре
-            name = prep_map.get(int(i)) or prep_map.get(str(i)) or f"ID {i}"
-            selected_names.append(name)
-
-        formatted_list = "\n".join(f"• {name}" for name in selected_names)
-
-        response_text = (
-            f"✅ <b>Список сохранён:</b>\n{formatted_list}\n\n"
-            "✍️ <b>Введите условия договора</b> (например: 10% скидка):"
-        )
-        await callback.message.edit_text(response_text)
         await state.set_state(PrescriptionFSM.contract_terms)
 
-        # Чистим временные данные, чтобы не занимать память
-        await TempDataManager.remove(state, "prep_items", "prep_map")
+        prep_map = await TempDataManager.get(state, "prep_map", {})
+        names = [prep_map.get(str(i)) or prep_map.get(int(i)) or f"ID {i}" for i in selected_ids]
+        names_str = "\n".join([f"• {n}" for n in names])
+
+        await callback.message.edit_text(
+            f"✅ <b>Выбрано:</b>\n{names_str}\n\n✍️ Введите условия договора:"
+        )
 
     # --- АПТЕКА ---
     elif prefix == "apt":
         await TempDataManager.set(state, "quantity_queue", list(selected_ids))
         await TempDataManager.set(state, "final_quantities", {})
-        await TempDataManager.set(state, "prefix", "apt")
 
         await callback.message.edit_text("✅ <b>Список принят.</b>\nПереходим к вводу количества.")
-        # Запускаем цикл опроса (передаем message объект для ответа)
         await ask_next_pharmacy_item(callback.message, state)
 
-    else:
-        await callback.answer("⚠️ Ошибка состояния", show_alert=True)
+    await callback.answer()
 
 
 # ============================================================
-# 🔢 АПТЕКА: ВВОД КОЛИЧЕСТВА (HELPER)
+# 8. ВЫБОР ВРАЧА (Обычный)
+# ============================================================
+@router.callback_query(F.data.startswith("doc_"), PrescriptionFSM.choose_doctor)
+async def process_doctor(callback: types.CallbackQuery, state: FSMContext):
+    doc_id = int(callback.data.split("_")[-1])
+    doc_name = await TempDataManager.get_button_name(state, callback.data) or "Врач"
+
+    await TempDataManager.set(state, "doc_id", doc_id)
+    await TempDataManager.set(state, "doc_name", doc_name)
+    await TempDataManager.set(state, "prefix", "doc")
+
+    async for session in db_helper.get_pharmacy_session():
+        repo = PharmacyRepository(session)
+
+        # 🔥 1. Достаем объект врача из базы
+        doctor = await repo.get_doctor_by_id(doc_id)
+        doc_spec = "Не указана"
+
+        # 🔥 2. Достаем его специальность через твою функцию
+        if doctor:
+            # Ищем spec_id (или main_spec_id, если колонка еще так называется)
+            spec_id = getattr(doctor, 'spec_id', None) or getattr(doctor, 'main_spec_id', None)
+
+            if spec_id:
+                # Получаем реальное название профессии (Терапевт, Хирург и т.д.)
+                real_spec = await repo.get_spec_name(spec_id)
+                if real_spec:
+                    doc_spec = real_spec
+
+        # Сохраняем профессию в память для отчета
+        await TempDataManager.set(state, "doc_spec", doc_spec)
+
+        # 3. Переходим к клавиатуре с препаратами
+        items = await ensure_prep_items_loaded(state)
+        await TempDataManager.set(state, "selected_items", [])
+
+        kb = build_multi_select_keyboard(items, [], "doc")
+
+        await state.set_state(PrescriptionFSM.choose_meds)
+        await callback.message.edit_text(
+            f"👨‍⚕️ <b>{doc_name}</b> ({doc_spec})\n💊 Выберите препараты:",
+            reply_markup=kb
+        )
+    await callback.answer()
+
+# ============================================================
+# 9. АПТЕКА: ВВОД КОЛИЧЕСТВА (HELPER)
 # ============================================================
 async def ask_next_pharmacy_item(message: types.Message, state: FSMContext):
     queue = await TempDataManager.get(state, "quantity_queue", [])
-    prep_map = await TempDataManager.get(state, "prep_map", {})
 
-    # --- 🏁 ОЧЕРЕДЬ ПУСТА (Все заполнено) ---
+    # Если очередь пуста - финиш
     if not queue:
         final_quantities = await TempDataManager.get(state, "final_quantities", {})
+        prep_map = await TempDataManager.get(state, "prep_map", {})
 
         summary_text = "<b>✅ Данные приняты:</b>\n\n"
-        for p_id, val_dict in final_quantities.items():
-            # Ищем имя (как int так и str)
-            name = prep_map.get(int(p_id)) or prep_map.get(str(p_id)) or "Unknown"
-            req = val_dict.get('req', 0)
-            rem = val_dict.get('rem', 0)
-            summary_text += f"• {name}\n   └ Заявка: {req} | Остаток: {rem}\n"
+        for p_id_str, val in final_quantities.items():
+            name = prep_map.get(str(p_id_str)) or prep_map.get(int(p_id_str)) or f"ID {p_id_str}"
+            summary_text += f"• {name}\n   └ Заявка: {val['req']} | Остаток: {val['rem']}\n"
 
         await message.answer(summary_text)
-
         await message.answer("✍️ <b>Напишите комментарий</b> (или отправьте '-', если нет):")
-        # Исправил состояние: теперь оно ведет к message handler'у
         await state.set_state(PrescriptionFSM.pharmacy_comments)
         return
 
-    # --- 🔄 СЛЕДУЮЩИЙ ---
+    # Берем следующий ID
     current_id = queue[0]
-    current_name = prep_map.get(int(current_id)) or prep_map.get(str(current_id)) or f"ID {current_id}"
+    prep_map = await TempDataManager.get(state, "prep_map", {})
+    current_name = prep_map.get(str(current_id)) or prep_map.get(int(current_id)) or f"ID {current_id}"
 
     await TempDataManager.set(state, "current_process_id", current_id)
     await TempDataManager.set(state, "current_process_name", current_name)
 
     await message.answer(
         f"💊 Препарат: <b>{current_name}</b>\n\n"
-        f"1️⃣ Введите количество для <b>Заявки</b> (сколько заказать):"
+        f"1️⃣ Введите <b>ЗАЯВКУ</b> (сколько заказать):"
     )
     await state.set_state(PrescriptionFSM.waiting_for_req_qty)
 
 
 # ============================================================
-# 🔢 АПТЕКА: ОБРАБОТЧИКИ ВВОДА
+# 10. ОБРАБОТЧИКИ ВВОДА (Оставляем как есть)
 # ============================================================
 @router.message(PrescriptionFSM.waiting_for_req_qty)
 async def process_req_qty(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("⚠️ Пожалуйста, введите целое число для заявки.")
-        return
+        return await message.answer("⚠️ Введите целое число.")
 
-    qty_req = int(message.text)
-    await TempDataManager.set(state, "temp_req_qty", qty_req)
-
+    await TempDataManager.set(state, "temp_req_qty", int(message.text))
     med_name = await TempDataManager.get(state, "current_process_name")
-    await message.answer(
-        f"✅ Заявка: {qty_req}\n\n"
-        f"2️⃣ Теперь введите <b>Остаток</b> (для {med_name}):"
-    )
+
+    await message.answer(f"✅ Заявка принята.\n2️⃣ Введите <b>ОСТАТОК</b> для {med_name}:")
     await state.set_state(PrescriptionFSM.waiting_for_rem_qty)
 
 
 @router.message(PrescriptionFSM.waiting_for_rem_qty)
 async def process_rem_qty(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("⚠️ Пожалуйста, введите целое число.")
-        return
+        return await message.answer("⚠️ Введите целое число.")
 
     qty_rem = int(message.text)
     qty_req = await TempDataManager.get(state, "temp_req_qty")
     current_id = await TempDataManager.get(state, "current_process_id")
 
-    # Сохраняем пару значений
-    value_data = {"req": qty_req, "rem": qty_rem}
-
     final_quantities = await TempDataManager.get(state, "final_quantities", {})
-    final_quantities[str(current_id)] = value_data  # Используем str ключ для JSON-сериализации
+    final_quantities[str(current_id)] = {"req": qty_req, "rem": qty_rem}
     await TempDataManager.set(state, "final_quantities", final_quantities)
 
-    # Удаляем обработанный элемент из очереди
     queue = await TempDataManager.get(state, "quantity_queue", [])
-    if queue:
-        queue.pop(0)
+    if queue: queue.pop(0)
     await TempDataManager.set(state, "quantity_queue", queue)
 
-    # Переходим к следующему
     await ask_next_pharmacy_item(message, state)
 
 
 @router.message(PrescriptionFSM.pharmacy_comments)
 async def process_pharmacy_comment(message: types.Message, state: FSMContext):
     comment = message.text.strip()
-    if comment.lower() in ["-", "нет", "no"]:
+    if comment.lower() in ["-", "нет", "no", "."]:
         comment = ""
 
     await TempDataManager.set(state, "comms", comment)
 
-    # Кнопка "Посмотреть"
-    kb = get_confirm_inline(mode=True)  # Используем helper для кнопки
+    # Кнопка "Загрузить / Посмотреть"
+    kb = get_confirm_inline(mode=True)
 
+    # 🔥 ВОТ ТУТ МЫ ПЕРЕХОДИМ В CONFIRMATION (И ЭТО ЛОВИТ save_handler.py)
     await state.set_state(PrescriptionFSM.confirmation)
-    await message.answer("✅ Данные готовы. Нажмите кнопку ниже для проверки:", reply_markup=kb)
+
+    await message.answer("✅ Отчет готов. Сохранить?", reply_markup=kb)
 
 
-# ============================================================
-# 📄 ПАГИНАЦИЯ ВРАЧЕЙ
-# ============================================================
 @router.callback_query(F.data.startswith("docpage_"))
 async def paginate_doctors(callback: types.CallbackQuery, state: FSMContext):
     try:
         parts = callback.data.split("_")
-        lpu_id = int(parts[1])
-        page = int(parts[2])
+        lpu_id, page = int(parts[1]), int(parts[2])
 
         async for session in db_helper.get_pharmacy_session():
             repo = PharmacyRepository(session)
             doctors = await repo.get_doctors_by_lpu(lpu_id)
-
-            keyboard = await get_doctors_inline(
-                doctors=doctors,
-                lpu_id=lpu_id,
-                page=page,
-                state=state
-            )
-
+            kb = await get_doctors_inline(doctors, lpu_id, page, state)
             with suppress(TelegramBadRequest):
-                await callback.message.edit_reply_markup(reply_markup=keyboard)
-
-    except Exception as e:
-        logger.error(f"Pagination error: {e}")
-
+                await callback.message.edit_reply_markup(reply_markup=kb)
+    except Exception:
+        pass
     await callback.answer()
