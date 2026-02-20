@@ -8,7 +8,6 @@ from infrastructure.database.repo.user_repo import UserRepository
 # ----------------------
 
 from db.reports import ReportRepository
-from db.database import BotDB
 from utils.config.settings import config
 from utils.text.pw import hash_password, check_password as verify_password  # Переименовал для ясности
 

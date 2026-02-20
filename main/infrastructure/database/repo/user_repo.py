@@ -8,8 +8,7 @@ class UserRepository:
         self.session = session
 
     async def get_user(self, user_id: int) -> Optional[User]:
-        # Превращаем в строку, если в базе хранится String
-        stmt = select(User).where(User.user_id == str(user_id))
+        stmt = select(User).where(User.user_id == user_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
