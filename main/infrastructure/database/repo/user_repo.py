@@ -42,3 +42,16 @@ class UserRepository:
         self.session.add(new_user)
         await self.session.commit()
         return new_user
+
+    async def set_logged_in(self, telegram_id: int, status: bool):
+        """
+        Обновляет статус авторизации пользователя (logged_in).
+        """
+
+        stmt = (
+            update(User)
+            .where(User.user_id == telegram_id)
+            .values(logged_in=status)
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()

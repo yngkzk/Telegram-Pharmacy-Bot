@@ -13,6 +13,7 @@ from states.menu.main_menu_state import MainMenu
 
 from storage.temp_data import TempDataManager
 from utils.logger.logger_config import logger
+from utils.config.settings import config
 
 from keyboard.inline import inline_buttons, inline_select, menu_kb, admin_kb
 
@@ -90,6 +91,10 @@ async def on_feedback_menu(callback: types.CallbackQuery, reports_db: ReportRepo
 @router.callback_query(F.data == "admin_panel")
 async def on_admin_panel(callback: types.CallbackQuery):
     """Нажата кнопка 'Админка'"""
+    if callback.from_user.id not in config.admin_ids:
+        return await callback.answer("⛔️ У вас нет прав доступа к панели администратора!", show_alert=True)
+
+    # Если проверка пройдена, пускаем дальше:
     keyboard = admin_kb.get_admin_menu()
     await callback.message.edit_text(
         "⚙️ <b>Админ панель</b>\nВыберите действие:",
