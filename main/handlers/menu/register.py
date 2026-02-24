@@ -2,14 +2,12 @@ from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- SENIOR IMPORTS ---
-from infrastructure.database.db_helper import db_helper
+# 🔥 НОВЫЕ ЧИСТЫЕ ИМПОРТЫ РЕПОЗИТОРИЕВ
 from infrastructure.database.repo.user_repo import UserRepository
-# ----------------------
+from infrastructure.database.repo.report_repo import ReportRepository
 
-from db.reports import ReportRepository
-from utils.config.settings import config
-from utils.text.pw import hash_password, check_password as verify_password  # Переименовал для ясности
+from utils.config.config import config
+from utils.text.pw import hash_password, check_password as verify_password
 
 from states.menu.register_state import Register, LoginFSM
 from states.menu.main_menu_state import MainMenu
@@ -45,47 +43,35 @@ async def cancel_auth(callback: types.CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# 👤 ЛОГИН (СУЩЕСТВУЮЩИЙ ПОЛЬЗОВАТЕЛЬ) - РУЧНОЙ ВВОД
+# 👤 ЛОГИН (СУЩЕСТВУЮЩИЙ ПОЛЬЗОВАТЕЛЬ)
 # ============================================================
-
 @router.callback_query(F.data == "auth_existing")
 async def start_login_flow(callback: types.CallbackQuery, state: FSMContext):
-    # Теперь мы не показываем кнопки с логинами, а просим написать логин
     await state.set_state(LoginFSM.choose_user)
-    await callback.message.edit_text(
-        "✍️ <b>Введите ваш логин</b> (Имя пользователя):"
-    )
+    await callback.message.edit_text("✍️ <b>Введите ваш логин</b> (Имя пользователя):")
     await callback.answer()
 
 
 @router.message(LoginFSM.choose_user)
-async def process_login_input(message: types.Message, state: FSMContext):
-    # Читаем то, что ввел пользователь
+async def process_login_input(
+        message: types.Message,
+        state: FSMContext,
+        user_repo: UserRepository  # <-- Работает магия Middleware!
+):
     username_input = message.text.strip()
+    user = await user_repo.get_user_by_username(username_input)
 
-    async for session in db_helper.get_user_session():
-        repo = UserRepository(session)
-        user = await repo.get_user_by_username(username_input)
+    if not user:
+        return await message.answer("❌ Пользователь с таким логином не найден. Проверьте опечатку:")
 
-        # 1. Проверяем, существует ли такой пользователь
-        if not user:
-            await message.answer(
-                "❌ Пользователь с таким логином не найден. Проверьте опечатку и попробуйте еще раз (или нажмите /start для отмены):")
-            return
+    if not user.is_approved:
+        return await message.answer("⏳ Ваш аккаунт еще на проверке у администратора. Ожидайте.")
 
-        # 2. Опционально: проверяем, подтвержден ли он админом (если у тебя есть поле is_approved)
-        # Если такого поля нет в модели, можешь просто удалить эти 3 строчки
-        if hasattr(user, 'is_approved') and not user.is_approved:
-            await message.answer("⏳ Ваш аккаунт еще на проверке у администратора. Ожидайте.")
-            return
-
-    # Если логин верный, сохраняем его и просим пароль
     await state.update_data(username=username_input)
     await state.set_state(LoginFSM.enter_password)
 
     await message.answer(
-        f"🔑 Профиль найден: <b>{username_input}</b>\n\n"
-        "✍️ Введите ваш пароль:"
+        f"🔑 Профиль найден: <b>{username_input}</b>\n\n✍️ Введите ваш пароль:"
     )
 
 
@@ -93,45 +79,40 @@ async def process_login_input(message: types.Message, state: FSMContext):
 async def check_password_handler(
         message: types.Message,
         state: FSMContext,
-        reports_db: ReportRepository  # Старую reports_db пока оставляем
+        user_repo: UserRepository,
+        reports_db: ReportRepository
 ):
     password_input = message.text
-
-    # Удаляем сообщение с паролем из чата для безопасности
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
 
     data = await state.get_data()
     username = data.get("username")
     user_id = message.from_user.id
 
-    async for session in db_helper.get_user_session():
-        repo = UserRepository(session)
-        user = await repo.get_user_by_username(username)
+    user = await user_repo.get_user_by_username(username)
 
-        if not user:
-            await message.answer("❌ Ошибка: Пользователь не найден.")
-            return
+    if not user:
+        return await message.answer("❌ Ошибка: Пользователь не найден.")
 
-        # Проверяем хеш пароля
-        if verify_password(password_input, user.user_password):
+    if verify_password(password_input, user.user_password):
+        await user_repo.set_logged_in(user_id, True)
 
-            # 🔥 МЕНЯЕМ СТАТУС В БАЗЕ ДАННЫХ НА TRUE
-            await repo.set_logged_in(user_id, True)
+        # 🔥 МАГИЧЕСКАЯ СТРОЧКА: Сохраняем регион именно этого аккаунта в сессию!
+        await state.update_data(user_region=user.region)
 
-            kb = await get_main_menu_inline(user_id, reports_db)
-            await state.set_state(MainMenu.logged_in)
-            await message.answer(f"✅ Успешный вход!\nДобро пожаловать, <b>{username}</b>!", reply_markup=kb)
-        else:
-            await message.answer("❌ Неверный пароль. Попробуйте снова:")
+        kb = await get_main_menu_inline(user_id, reports_db)
+        await state.set_state(MainMenu.logged_in)
+        await message.answer(f"✅ Успешный вход!\nДобро пожаловать, <b>{username}</b>!", reply_markup=kb)
+    else:
+        await message.answer("❌ Неверный пароль. Попробуйте снова:")
 
 
 # ============================================================
 # 🆕 РЕГИСТРАЦИЯ (НОВЫЙ ПОЛЬЗОВАТЕЛЬ)
 # ============================================================
-
 @router.callback_query(F.data == "auth_new")
 async def start_register_flow(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Register.region)
@@ -147,9 +128,15 @@ async def get_region(message: types.Message, state: FSMContext):
 
 
 @router.message(Register.login)
-async def get_login(message: types.Message, state: FSMContext):
-    # Опционально: здесь можно добавить проверку, занят ли логин
-    await state.update_data(login=message.text)
+async def get_login(message: types.Message, state: FSMContext, user_repo: UserRepository):
+    username_input = message.text.strip()
+
+    # Сразу проверяем, занят ли логин (улучшаем UX)
+    existing_user = await user_repo.get_user_by_username(username_input)
+    if existing_user:
+        return await message.answer("❌ Этот логин уже занят. Придумайте другой:")
+
+    await state.update_data(login=username_input)
     await state.set_state(Register.password)
     await message.answer("🔑 Придумайте <b>Пароль</b>:")
 
@@ -158,25 +145,29 @@ async def get_login(message: types.Message, state: FSMContext):
 async def get_password(message: types.Message, state: FSMContext):
     await state.update_data(password=message.text)
     try:
-        await message.delete()  # Удаляем пароль из чата
-    except:
+        await message.delete()
+    except Exception:
         pass
     await state.set_state(Register.confirm)
     await message.answer("🔐 <b>Повторите пароль</b> для подтверждения:")
 
 
 @router.message(Register.confirm)
-async def confirm_password(message: types.Message, state: FSMContext, bot: Bot):
+async def confirm_password(
+        message: types.Message,
+        state: FSMContext,
+        bot: Bot,
+        user_repo: UserRepository
+):
     data = await state.get_data()
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
 
     if message.text != data["password"]:
-        await message.answer("❌ Пароли не совпадают! Придумайте пароль заново:")
         await state.set_state(Register.password)
-        return
+        return await message.answer("❌ Пароли не совпадают! Придумайте пароль заново:")
 
     user_id = message.from_user.id
     user_name = data["login"]
@@ -185,33 +176,25 @@ async def confirm_password(message: types.Message, state: FSMContext, bot: Bot):
 
     hashed_pw = hash_password(raw_password)
 
-    # --- СОХРАНЕНИЕ НОВОГО ПОЛЬЗОВАТЕЛЯ ---
-    async for session in db_helper.get_user_session():
-        repo = UserRepository(session)
-        try:
-            await repo.create_user(user_id, user_name, hashed_pw, region)
+    try:
+        await user_repo.create_user(user_id, user_name, hashed_pw, region)
+        await message.answer("✅ <b>Заявка отправлена!</b>\n\nВаш аккаунт находится на проверке у администратора.")
 
-            await message.answer(
-                "✅ <b>Заявка отправлена!</b>\n\n"
-                "Ваш аккаунт находится на проверке у администратора."
-            )
+        # Уведомление админам
+        admin_text = (
+            f"🔔 <b>Новая регистрация!</b>\n"
+            f"👤 Имя: {user_name}\n"
+            f"📍 Регион: {region}\n"
+            f"🆔 Telegram ID: {user_id}\n\n"
+            f"Используйте панель администратора для подтверждения."
+        )
+        for admin_id in config.admin_ids:
+            try:
+                await bot.send_message(admin_id, admin_text)
+            except Exception:
+                pass
 
-            # Уведомление админам
-            admin_text = (
-                f"🔔 <b>Новая регистрация!</b>\n"
-                f"👤 Имя: {user_name}\n"
-                f"📍 Регион: {region}\n"
-                f"🆔 Telegram ID: {user_id}\n\n"
-                f"Используйте /admin чтобы подтвердить."
-            )
-            for admin_id in config.admin_ids:
-                try:
-                    await bot.send_message(admin_id, admin_text)
-                except:
-                    pass
-
-            await state.clear()
-
-        except Exception as e:
-            await message.answer(f"❌ Ошибка регистрации: Возможно, такой логин уже занят.")
-            print(f"Registration Error: {e}")
+        await state.clear()
+    except Exception as e:
+        await message.answer("❌ Ошибка регистрации. Попробуйте позже.")
+        print(f"Registration Error: {e}")

@@ -1,10 +1,8 @@
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 
-# Импорты Новой Базы
-from infrastructure.database.db_helper import db_helper
+# 🔥 НОВЫЕ ИМПОРТЫ РЕПОЗИТОРИЕВ
 from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
-from storage.temp_data import TempDataManager
 from utils.logger.logger_config import logger
 
 # Импорты клавиатур
@@ -36,43 +34,44 @@ async def process_lpu_name(message: types.Message, state: FSMContext):
 
 
 @router.message(AddPharmacy.waiting_for_url)
-async def process_lpu_final(message: types.Message, state: FSMContext):
+async def process_lpu_final(
+        message: types.Message,
+        state: FSMContext,
+        pharmacy_repo: PharmacyRepository
+):
     url_text = message.text.strip()
     final_url = None if url_text in ["-", "нет"] else url_text
 
     data = await state.get_data()
     name = data.get("new_place_name")
 
-    # Берем road_id, который мы сохранили в general_callbacks
-    # (Обрати внимание: мы использовали TempData, там ключ 'road_id')
-    road_id = await TempDataManager.get(state, "road_id")
+    # Берем road_id из нативного FSMContext
+    road_id = data.get("road_id")
 
     if not road_id:
         await message.answer("❌ Ошибка: Маршрут потерян. Начните сначала.")
         await state.clear()
         return
 
-    async for session in db_helper.get_pharmacy_session():
-        repo = PharmacyRepository(session)
-        try:
-            # 1. Добавляем в БД
-            await repo.add_lpu(road_id, name, final_url)
-            logger.info(f"✅ Added LPU: {name}")
+    try:
+        # Добавляем в БД через DI репозиторий
+        await pharmacy_repo.add_lpu(road_id, name, final_url)
+        logger.info(f"✅ Added LPU: {name}")
 
-            await message.answer(f"✅ ЛПУ <b>«{name}»</b> добавлено!")
+        await message.answer(f"✅ ЛПУ <b>«{name}»</b> добавлено!")
 
-            # 2. Получаем обновленный список
-            items = await repo.get_lpus_by_road(road_id)
+        # Получаем обновленный список
+        items = await pharmacy_repo.get_lpus_by_road(road_id)
 
-            # 3. Рисуем клавиатуру (в новом формате!)
-            keyboard = await get_lpu_inline(items, state)
+        # Рисуем клавиатуру
+        keyboard = await get_lpu_inline(items, state)
 
-            await message.answer("🏥 Выберите ЛПУ из списка:", reply_markup=keyboard)
-            await state.set_state(PrescriptionFSM.choose_lpu)  # Исправил на choose_lpu (как в general_callbacks)
+        await message.answer("🏥 Выберите ЛПУ из списка:", reply_markup=keyboard)
+        await state.set_state(PrescriptionFSM.choose_lpu)
 
-        except Exception as e:
-            logger.critical(f"DB Error adding LPU: {e}")
-            await message.answer("❌ Ошибка при добавлении.")
+    except Exception as e:
+        logger.critical(f"DB Error adding LPU: {e}")
+        await message.answer("❌ Ошибка при добавлении.")
 
 
 # ==========================================
@@ -94,37 +93,37 @@ async def process_ap_name(message: types.Message, state: FSMContext):
 
 
 @router.message(AddApothecary.waiting_for_url)
-async def process_ap_final(message: types.Message, state: FSMContext):
+async def process_ap_final(
+        message: types.Message,
+        state: FSMContext,
+        pharmacy_repo: PharmacyRepository
+):
     url_text = message.text.strip()
     final_url = None if url_text in ["-", "нет"] else url_text
 
     data = await state.get_data()
     name = data.get("new_place_name")
-
-    road_id = await TempDataManager.get(state, "road_id")
+    road_id = data.get("road_id")
 
     if not road_id:
         await message.answer("❌ Маршрут потерян.")
         return
 
-    async for session in db_helper.get_pharmacy_session():
-        repo = PharmacyRepository(session)
-        try:
-            await repo.add_apothecary(road_id, name, final_url)
-            logger.info(f"✅ Added Apothecary: {name}")
+    try:
+        await pharmacy_repo.add_apothecary(road_id, name, final_url)
+        logger.info(f"✅ Added Apothecary: {name}")
 
-            await message.answer(f"✅ Аптека <b>«{name}»</b> добавлена!")
+        await message.answer(f"✅ Аптека <b>«{name}»</b> добавлена!")
 
-            # Обновляем список аптек
-            items = await repo.get_apothecaries_by_road(road_id)
-            keyboard = await get_apothecary_inline(items, state)
+        items = await pharmacy_repo.get_apothecaries_by_road(road_id)
+        keyboard = await get_apothecary_inline(items, state)
 
-            await message.answer("🏪 Выберите аптеку:", reply_markup=keyboard)
-            await state.set_state(PrescriptionFSM.choose_apothecary)
+        await message.answer("🏪 Выберите аптеку:", reply_markup=keyboard)
+        await state.set_state(PrescriptionFSM.choose_apothecary)
 
-        except Exception as e:
-            logger.critical(f"DB Error: {e}")
-            await message.answer("Ошибка добавления.")
+    except Exception as e:
+        logger.critical(f"DB Error: {e}")
+        await message.answer("Ошибка добавления.")
 
 
 # ==========================================
@@ -133,9 +132,10 @@ async def process_ap_final(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("add_doctor_"))
 async def start_add_doc(callback: types.CallbackQuery, state: FSMContext):
-    # Достаем ID ЛПУ прямо из кнопки (мы его туда зашили в get_doctors_inline)
     lpu_id = int(callback.data.split("_")[-1])
-    await TempDataManager.set(state, "lpu_id", lpu_id)
+
+    # Сохраняем ID ЛПУ в нативный стейт
+    await state.update_data(lpu_id=lpu_id)
 
     await callback.message.answer("✍️ Введите <b>ФИО врача</b>:")
     await state.set_state(AddDoctor.waiting_for_name)
@@ -143,30 +143,29 @@ async def start_add_doc(callback: types.CallbackQuery, state: FSMContext):
 
 
 @router.message(AddDoctor.waiting_for_name)
-async def process_doc_name(message: types.Message, state: FSMContext):
+async def process_doc_name(
+        message: types.Message,
+        state: FSMContext,
+        pharmacy_repo: PharmacyRepository
+):
     name = message.text.strip()
     await state.update_data(new_doc_name=name)
 
-    async for session in db_helper.get_pharmacy_session():
-        repo = PharmacyRepository(session)
-        specs = await repo.get_all_specs()
+    specs = await pharmacy_repo.get_all_specs()
+    keyboard = await get_specs_inline(specs)
 
-        keyboard = await get_specs_inline(specs)
-
-        await message.answer(
-            f"🩺 Выберите специальность врача <b>{name}</b> из списка:\n"
-            f"<i>Или напишите новую вручную, и я добавлю её в базу.</i>",
-            reply_markup=keyboard
-        )
-        # Ждем ЛИБО нажатия кнопки, ЛИБО текста
-        await state.set_state(AddDoctor.waiting_for_spec)
+    await message.answer(
+        f"🩺 Выберите специальность врача <b>{name}</b> из списка:\n"
+        f"<i>Или напишите новую вручную, и я добавлю её в базу.</i>",
+        reply_markup=keyboard
+    )
+    await state.set_state(AddDoctor.waiting_for_spec)
 
 
 @router.callback_query(F.data.startswith("spec_"), AddDoctor.waiting_for_spec)
 async def process_spec_button(callback: types.CallbackQuery, state: FSMContext):
     spec_id = int(callback.data.split("_")[-1])
-
-    await state.update_data(new_doc_spec_id=spec_id)  # Сохраняем ID!
+    await state.update_data(new_doc_spec_id=spec_id)
 
     await callback.message.edit_text(f"✅ Специальность выбрана.")
     await callback.message.answer("📱 Введите <b>номер телефона</b> (или отправьте «-»):")
@@ -175,57 +174,57 @@ async def process_spec_button(callback: types.CallbackQuery, state: FSMContext):
 
 
 @router.message(AddDoctor.waiting_for_spec)
-async def process_spec_text(message: types.Message, state: FSMContext):
+async def process_spec_text(
+        message: types.Message,
+        state: FSMContext,
+        pharmacy_repo: PharmacyRepository
+):
     spec_name = message.text.strip()
 
     # Магия: ищем или создаем
-    async for session in db_helper.get_pharmacy_session():
-        repo = PharmacyRepository(session)
-        spec_id = await repo.get_or_create_spec_id(spec_name)
+    spec_id = await pharmacy_repo.get_or_create_spec_id(spec_name)
+    await state.update_data(new_doc_spec_id=spec_id)
 
-        await state.update_data(new_doc_spec_id=spec_id)  # Сохраняем ID!
-
-        await message.answer(f"✨ Новая специальность <b>«{spec_name}»</b> добавлена в справочник!")
-        await message.answer("📱 Введите <b>номер телефона</b> (или отправьте «-»):")
-        await state.set_state(AddDoctor.waiting_for_number)
+    await message.answer(f"✨ Новая специальность <b>«{spec_name}»</b> добавлена в справочник!")
+    await message.answer("📱 Введите <b>номер телефона</b> (или отправьте «-»):")
+    await state.set_state(AddDoctor.waiting_for_number)
 
 
 # 4. Финал (Сохранение врача)
 @router.message(AddDoctor.waiting_for_number)
-async def process_doc_final(message: types.Message, state: FSMContext):
-    numb = message.text.strip()
-    if numb in ["-", "нет", "."]: phone = None
+async def process_doc_final(
+        message: types.Message,
+        state: FSMContext,
+        pharmacy_repo: PharmacyRepository
+):
+    numb_input = message.text.strip()
+    phone = None if numb_input in ["-", "нет", "."] else numb_input
 
     data = await state.get_data()
     name = data.get("new_doc_name")
-    spec_id = data.get("new_doc_spec_id")  # Берем ID, а не текст
-
-    lpu_id = await TempDataManager.get(state, "lpu_id")
+    spec_id = data.get("new_doc_spec_id")
+    lpu_id = data.get("lpu_id")
 
     if not lpu_id:
         await message.answer("❌ Ошибка: ID ЛПУ потерян.")
         return
 
-    async for session in db_helper.get_pharmacy_session():
-        repo = PharmacyRepository(session)
-        try:
-            # Вызываем обновленный метод add_doctor (с spec_id)
-            await repo.add_doctor(lpu_id, name, spec_id, numb)
+    try:
+        await pharmacy_repo.add_doctor(lpu_id, name, spec_id, phone)
+        await message.answer(f"✅ Врач <b>{name}</b> успешно добавлен!")
 
-            await message.answer(f"✅ Врач <b>{name}</b> успешно добавлен!")
+        # Показываем список
+        doctors = await pharmacy_repo.get_doctors_by_lpu(lpu_id)
+        keyboard = await get_doctors_inline(
+            doctors=doctors,
+            lpu_id=lpu_id,
+            page=1,
+            state=state
+        )
 
-            # Показываем список
-            doctors = await repo.get_doctors_by_lpu(lpu_id)
-            keyboard = await get_doctors_inline(
-                doctors=doctors,
-                lpu_id=lpu_id,
-                page=1,
-                state=state
-            )
+        await message.answer("👨‍⚕️ Выберите врача:", reply_markup=keyboard)
+        await state.set_state(PrescriptionFSM.choose_doctor)
 
-            await message.answer("👨‍⚕️ Выберите врача:", reply_markup=keyboard)
-            await state.set_state(PrescriptionFSM.choose_doctor)
-
-        except Exception as e:
-            logger.critical(f"DB Error adding Doctor: {e}")
-            await message.answer(f"❌ Ошибка базы: {e}")
+    except Exception as e:
+        logger.critical(f"DB Error adding Doctor: {e}")
+        await message.answer(f"❌ Ошибка базы: {e}")

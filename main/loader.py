@@ -2,7 +2,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from utils.config.settings import config
+from utils.config.config import config
 
 # Инициализация бота с использованием конфига
 bot = Bot(

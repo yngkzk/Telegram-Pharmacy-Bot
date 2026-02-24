@@ -2,10 +2,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
-# Импортируем класс для типа (чтобы IDE подсказывала методы)
-from db.database import BotDB
-from storage.temp_data import TempDataManager
-
+# 🔥 НОВЫЙ ИМПОРТ
+from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 
 def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) -> InlineKeyboardMarkup:
     """
@@ -13,25 +11,15 @@ def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) 
     """
     builder = InlineKeyboardBuilder()
 
-    # ОПТИМИЗАЦИЯ: Превращаем список ID в множество строк для мгновенного поиска
-    # Это работает быстрее, чем перебирать список для каждого товара
     selected_set = {str(x) for x in selected_ids}
 
     for item in options:
-        # 1. Безопасное извлечение ID и Имени
+        # 1. Адаптация под объекты SQLAlchemy (ORM)
         try:
-            # Если это aiosqlite.Row или словарь
-            if hasattr(item, "keys") or isinstance(item, dict):
-                opt_id = item["id"]
-                # Пробуем найти имя в разных полях
-                name = item.get("prep") or item.get("name") or "Unknown"
-            # Если это кортеж (id, name)
-            elif isinstance(item, (list, tuple)):
-                opt_id = item[0]
-                name = item[1]
-            else:
-                continue
-        except (IndexError, KeyError):
+            opt_id = getattr(item, "id")
+            # Ищем атрибут prep (для Medication) или name (если передали что-то другое)
+            name = getattr(item, "prep", getattr(item, "name", "Unknown"))
+        except AttributeError:
             continue
 
         # 2. Статус чекбокса
@@ -45,11 +33,9 @@ def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) 
 
         builder.button(text=text, callback_data=callback_data)
 
-    # Выстраиваем список в 1 колонку
     builder.adjust(1)
 
     # 3. Нижняя панель управления
-    # Сброс выбранного
     builder.row(
         InlineKeyboardButton(text="🔄 Сброс", callback_data="reset_selection"),
         InlineKeyboardButton(text="💾 Сохранить", callback_data="confirm_selection")
@@ -64,20 +50,21 @@ def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) 
 
 
 async def get_prep_inline(
-        pharmacy_db: BotDB,  # <--- ГЛАВНОЕ ИЗМЕНЕНИЕ: Принимаем базу как аргумент
+        pharmacy_repo: PharmacyRepository,  # <-- Перешли на репозиторий
         state: FSMContext,
         prefix: str
 ) -> InlineKeyboardMarkup:
     """
     Асинхронный загрузчик списка препаратов.
     """
-    # 1. Получаем список из БД через переданный объект
-    items = await pharmacy_db.get_prep_list()
+    # 1. Получаем список из БД через новый метод
+    items = await pharmacy_repo.get_preps()
 
-    # 2. Сохраняем контекст (откуда пришли: врач 'doc' или аптека 'apt')
-    await TempDataManager.set(state, key="prefix", value=prefix)
+    # 2. Сохраняем контекст в нативный FSM
+    await state.update_data(prefix=prefix)
 
-    # 3. Получаем уже выбранные элементы (если есть)
-    selected = await TempDataManager.get(state, "selected_items", [])
+    # 3. Получаем уже выбранные элементы
+    data = await state.get_data()
+    selected = data.get("selected_items", [])
 
     return build_multi_select_keyboard(items, selected, prefix)

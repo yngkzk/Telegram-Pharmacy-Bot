@@ -1,14 +1,14 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Импортируем только класс для подсказки типов (это не создает объект, это безопасно)
-from db.reports import ReportRepository
-
+# 🔥 НОВЫЙ ИМПОРТ РЕПОЗИТОРИЯ
+from infrastructure.database.repo.report_repo import ReportRepository
+from utils.logger.logger_config import logger
 
 async def get_main_menu_inline(user_id: int, reports_db: ReportRepository) -> InlineKeyboardMarkup:
     """
     Menu for Logged In Users.
-    Теперь требует передачу reports_db явно.
+    Требует передачу reports_db явно для проверки задач.
     """
     builder = InlineKeyboardBuilder()
 
@@ -18,8 +18,8 @@ async def get_main_menu_inline(user_id: int, reports_db: ReportRepository) -> In
         # Используем переданный аргумент reports_db
         unread_count = await reports_db.get_unread_count(user_id)
     except Exception as e:
-        # Логируем ошибку, чтобы не гадать, почему счетчик 0
-        print(f"Error fetching unread tasks for menu: {e}")
+        # Логируем ошибку профессионально
+        logger.error(f"Error fetching unread tasks for menu: {e}")
         unread_count = 0
 
     # 2. Формируем текст кнопки
