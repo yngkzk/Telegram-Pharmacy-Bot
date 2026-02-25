@@ -6,6 +6,7 @@ import infrastructure.database.models.users
 import infrastructure.database.models.pharmacy
 import infrastructure.database.models.reports
 
+
 class DatabaseHelper:
     def __init__(self):
         self.engine = create_async_engine(config.url_database, echo=False)

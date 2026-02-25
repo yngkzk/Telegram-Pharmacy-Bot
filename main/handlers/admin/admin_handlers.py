@@ -12,6 +12,7 @@ from infrastructure.database.repo.report_repo import ReportRepository
 # 2. Утилиты и логирование
 from utils.report.excel_generator import create_excel_report
 from utils.logger.logger_config import logger
+from utils.ui.ui_helper import safe_clear_state
 
 # 3. Клавиатуры и состояния
 from keyboard.inline.admin_kb import get_admin_menu, get_report_period_kb, get_report_users_kb
@@ -41,7 +42,7 @@ async def admin_save_task(message: types.Message, state: FSMContext, reports_db:
     await reports_db.add_task(text)
 
     await message.answer(f"✅ Задача опубликована:\n\n<i>{text}</i>", reply_markup=get_admin_menu())
-    await state.clear()
+    await safe_clear_state(state)
 
 
 # ============================================================
@@ -117,7 +118,7 @@ async def process_user_and_generate(
                 "❌ <b>За выбранный период данных нет.</b>",
                 reply_markup=get_admin_menu()
             )
-            await state.clear()
+            await safe_clear_state(state)
             return
 
         # Генерация Excel
@@ -150,12 +151,12 @@ async def process_user_and_generate(
         logger.error(f"Export Error: {e}")
         await callback.message.answer(f"❌ Ошибка при экспорте: {e}", reply_markup=get_admin_menu())
 
-    await state.clear()
+    await safe_clear_state(state)
 
 
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
+    await safe_clear_state(state)
     await callback.message.edit_text("⚙️ Админ панель", reply_markup=get_admin_menu())
 
 

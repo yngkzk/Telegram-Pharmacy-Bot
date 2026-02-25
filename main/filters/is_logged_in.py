@@ -3,6 +3,7 @@ from aiogram.filters import BaseFilter
 from aiogram.types import Message, CallbackQuery
 from loader import accountantDB
 
+
 class IsLoggedInFilter(BaseFilter):
     """
     Фильтр проверяет, авторизован ли пользователь в системе.

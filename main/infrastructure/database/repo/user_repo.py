@@ -3,6 +3,7 @@ from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from infrastructure.database.models.users import User
 
+
 class UserRepository:
     def __init__(self, session: AsyncSession):
         self.session = session

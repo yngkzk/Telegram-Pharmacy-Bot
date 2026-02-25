@@ -43,7 +43,7 @@ class PharmacyRepository:
 
     async def get_lpu_by_id(self, lpu_id: int) -> Optional[LPU]:
         """Получает конкретное ЛПУ по ID"""
-        stmt = select(LPU).where(LPU.id == lpu_id)
+        stmt = select(LPU).where(LPU.lpu_id == lpu_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

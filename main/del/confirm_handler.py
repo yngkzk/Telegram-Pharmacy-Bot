@@ -4,6 +4,8 @@ from infrastructure.database.db_helper import db_helper
 from infrastructure.database.repo.user_repo import UserRepository
 from infrastructure.database.repo.report_repo import ReportRepository
 from storage.temp_data import TempDataManager
+from ui.ui_helper import safe_clear_state
+
 
 router = Router()
 
@@ -71,7 +73,7 @@ async def final_confirm_report(callback: types.CallbackQuery, state: FSMContext,
             await reports_db.save_apothecary_preps(report_id, items_to_save)
 
         await callback.message.edit_text(f"✅ Отчёт успешно сохранён!\nСотрудник: <b>{real_name}</b>")
-        await state.clear()
+        await safe_clear_state(state)
 
     except Exception as e:
         logger.error(f"Ошибка сохранения отчета: {e}")

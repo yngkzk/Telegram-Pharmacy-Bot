@@ -1,7 +1,6 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
-# === FSM состояния ===
 class AddDoctor(StatesGroup):
     waiting_for_name = State()
     waiting_for_spec = State()

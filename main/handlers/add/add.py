@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 # 🔥 НОВЫЕ ИМПОРТЫ РЕПОЗИТОРИЕВ
 from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 from utils.logger.logger_config import logger
+from utils.ui.ui_helper import safe_clear_state
 
 # Импорты клавиатур
 from keyboard.inline.inline_buttons import get_lpu_inline, get_apothecary_inline, get_doctors_inline, get_specs_inline
@@ -11,6 +12,7 @@ from keyboard.inline.inline_buttons import get_lpu_inline, get_apothecary_inline
 # Импорты состояний
 from states.add.add_state import AddDoctor, AddPharmacy, AddApothecary
 from states.add.prescription_state import PrescriptionFSM
+
 
 router = Router()
 
@@ -50,7 +52,7 @@ async def process_lpu_final(
 
     if not road_id:
         await message.answer("❌ Ошибка: Маршрут потерян. Начните сначала.")
-        await state.clear()
+        await safe_clear_state(state)
         return
 
     try:

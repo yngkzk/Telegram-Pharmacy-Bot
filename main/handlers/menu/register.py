@@ -13,6 +13,7 @@ from states.menu.register_state import Register, LoginFSM
 from states.menu.main_menu_state import MainMenu
 from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
+
 router = Router()
 
 

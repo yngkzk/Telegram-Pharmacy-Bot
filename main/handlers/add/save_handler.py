@@ -9,6 +9,8 @@ from infrastructure.database.repo.report_repo import ReportRepository
 from states.add.prescription_state import PrescriptionFSM
 from keyboard.inline.inline_buttons import get_doctors_inline
 from utils.logger.logger_config import logger
+from utils.ui.ui_helper import safe_clear_state
+
 
 router = Router()
 
@@ -45,7 +47,7 @@ async def final_save_report(
 
     if not district_name or not road_num:
         await callback.answer("Ошибка: Данные локации потеряны. Начните заново.", show_alert=True)
-        await state.clear()
+        await safe_clear_state(state)
         return
 
     try:
@@ -110,7 +112,7 @@ async def final_save_report(
                 )
             else:
                 await callback.message.edit_text("✅ Отчет сохранен. Вернитесь в главное меню.")
-                await state.clear()
+                await safe_clear_state(state)
 
 
         # ==========================================
@@ -143,7 +145,7 @@ async def final_save_report(
                 f"✅ Отчет по аптеке <b>{apt_name}</b> успешно сохранен!\n\n"
                 f"Нажмите /start или выберите действие в меню."
             )
-            await state.clear()
+            await safe_clear_state(state)
 
         else:
             await callback.answer("❌ Ошибка: Неизвестный тип отчета.", show_alert=True)

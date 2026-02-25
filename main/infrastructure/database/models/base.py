@@ -1,6 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
+
 class Base(AsyncAttrs, DeclarativeBase):
     """
     Базовый класс для всех моделей.

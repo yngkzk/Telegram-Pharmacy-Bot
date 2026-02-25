@@ -5,10 +5,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base  # Импортируем твой базовый класс
 
 
-# ============================================================
-# 🏥 ОТЧЕТЫ ПО ВРАЧАМ (Main Reports)
-# ============================================================
-
 class MainReport(Base):
     __tablename__ = "main_reports"
 

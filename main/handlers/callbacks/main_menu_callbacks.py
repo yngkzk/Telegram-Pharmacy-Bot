@@ -14,6 +14,8 @@ from states.menu.main_menu_state import MainMenu
 from keyboard.inline import inline_buttons, menu_kb, admin_kb
 from utils.logger.logger_config import logger
 from utils.config.config import config
+from utils.ui.ui_helper import safe_clear_state
+
 
 router = Router()
 
@@ -138,7 +140,7 @@ async def on_logout(callback: types.CallbackQuery, state: FSMContext, user_repo:
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext, reports_db: ReportRepository):
     """Возвращает пользователя в главное меню"""
-    await state.clear()
+    await safe_clear_state(state)
     await state.set_state(MainMenu.logged_in)
 
     kb = await menu_kb.get_main_menu_inline(callback.from_user.id, reports_db)

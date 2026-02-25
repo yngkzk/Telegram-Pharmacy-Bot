@@ -16,6 +16,8 @@ from utils.logger.logger_config import logger
 from utils.config.settings import config
 
 from keyboard.inline import inline_buttons, inline_select, menu_kb, admin_kb
+from ui.ui_helper import safe_clear_state
+
 
 router = Router()
 
@@ -137,7 +139,7 @@ async def on_logout(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext, reports_db: ReportRepository):
     """Возвращает пользователя в главное меню"""
-    await state.clear()
+    await safe_clear_state(state)
     await state.set_state(MainMenu.logged_in)
 
     # Тут пока старый reports_db, это ок
@@ -414,6 +416,6 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.edit_text("✅ Врач успешно добавлен!")
         else:
             await callback.message.edit_text("❌ Добавление отменено.")
-        await state.clear()
+        await safe_clear_state(state)
         await callback.answer()
         return

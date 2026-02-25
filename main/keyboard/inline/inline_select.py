@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 # 🔥 НОВЫЙ ИМПОРТ
 from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 
+
 def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) -> InlineKeyboardMarkup:
     """
     Генерация клавиатуры с чекбоксами.

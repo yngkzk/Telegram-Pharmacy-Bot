@@ -6,6 +6,7 @@ from infrastructure.database.repo.report_repo import ReportRepository
 # Импортируем генератор меню
 from keyboard.inline.menu_kb import get_main_menu_inline
 
+
 router = Router()
 
 

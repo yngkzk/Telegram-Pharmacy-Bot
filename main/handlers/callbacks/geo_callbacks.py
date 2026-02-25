@@ -1,3 +1,4 @@
+from collections import namedtuple
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 
@@ -10,16 +11,22 @@ from states.add.prescription_state import PrescriptionFSM
 # Импорты клавиатур
 from keyboard.inline import inline_buttons
 
+
 router = Router()
+
+# Создаем легковесный "объект" для маршрутов, чтобы подружить его с ORM-клавиатурой
+MockRoad = namedtuple("MockRoad", ["road_num"])
+
 
 # ============================================================
 # 🗺 НАВИГАЦИЯ (Выбор района)
 # ============================================================
 
-@router.callback_query(F.data.contains("district_"))
+# Защитили фильтр от ложных срабатываний
+@router.callback_query(F.data.startswith("district_") | F.data.startswith("a_district_"))
 async def process_district(
-        callback: types.CallbackQuery, 
-        state: FSMContext, 
+        callback: types.CallbackQuery,
+        state: FSMContext,
         pharmacy_repo: PharmacyRepository
 ):
     is_pharmacy = callback.data.startswith("a_district_")
@@ -29,21 +36,22 @@ async def process_district(
     except ValueError:
         return await callback.answer("Ошибка: неверный ID района")
 
-    # 1. Используем DI репозиторий (никаких async for session!)
+    # 1. Используем DI репозиторий
     district = await pharmacy_repo.get_district_by_id(district_id)
 
     if not district:
         return await callback.answer("Район не найден", show_alert=True)
 
-    # 2. 🔥 ВАЖНО: Переходим на нативный FSMContext
-    # Можно передавать сразу несколько ключей
+    # 2. Сохраняем в нативный FSMContext
     await state.update_data(
         district_id=district_id,
         district_name=district.name
     )
 
     prefix = "a_road" if is_pharmacy else "road"
-    roads_fixed = [{"id": i, "road_num": i} for i in range(1, 8)]
+
+    # 🔥 Генерируем объекты, а не словари! Теперь `getattr` отработает идеально.
+    roads_fixed = [MockRoad(road_num=i) for i in range(1, 8)]
 
     kb = await inline_buttons.get_road_inline(roads_fixed, state, prefix=prefix)
 
@@ -58,10 +66,10 @@ async def process_district(
 # 🗺 НАВИГАЦИЯ (Выбор маршрута)
 # ============================================================
 
-@router.callback_query(F.data.contains("road_"))
+@router.callback_query(F.data.startswith("road_") | F.data.startswith("a_road_"))
 async def process_road(
-        callback: types.CallbackQuery, 
-        state: FSMContext, 
+        callback: types.CallbackQuery,
+        state: FSMContext,
         pharmacy_repo: PharmacyRepository
 ):
     is_pharmacy = callback.data.startswith("a_road_")

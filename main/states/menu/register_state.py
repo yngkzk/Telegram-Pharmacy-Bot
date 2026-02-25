@@ -1,5 +1,6 @@
 from aiogram.fsm.state import State, StatesGroup
 
+
 class Register(StatesGroup):
     region = State()   # Step 1: Input Region
     login = State()    # Step 2: Input Username

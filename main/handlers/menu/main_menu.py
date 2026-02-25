@@ -8,6 +8,7 @@ from infrastructure.database.repo.report_repo import ReportRepository
 
 from keyboard.inline.menu_kb import get_main_menu_inline, get_guest_menu_inline
 
+
 router = Router()
 
 @router.message(Command("start"))

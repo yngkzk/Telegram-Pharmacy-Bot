@@ -10,9 +10,8 @@ from aiogram.exceptions import (
 
 from utils.logger.logger_config import logger
 
-# Create a separate router for errors (Best Practice)
-router = Router()
 
+router = Router()
 
 def setup_error_handler(dp):
     """

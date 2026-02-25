@@ -7,9 +7,11 @@ from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 # Состояния
 from states.add.prescription_state import PrescriptionFSM
 from states.add.add_state import AddDoctor
+from utils.ui.ui_helper import safe_clear_state
 
 # Клавиатуры
 from keyboard.inline import inline_buttons
+
 
 router = Router()
 
@@ -74,7 +76,7 @@ async def handle_confirmation(
         else:
             await callback.message.edit_text("❌ Добавление отменено.")
 
-        await state.clear()
+        await safe_clear_state(state)
         await callback.answer()
         return
 

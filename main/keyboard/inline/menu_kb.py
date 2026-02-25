@@ -5,6 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from infrastructure.database.repo.report_repo import ReportRepository
 from utils.logger.logger_config import logger
 
+
 async def get_main_menu_inline(user_id: int, reports_db: ReportRepository) -> InlineKeyboardMarkup:
     """
     Menu for Logged In Users.
