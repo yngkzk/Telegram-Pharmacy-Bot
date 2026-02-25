@@ -6,8 +6,10 @@ from infrastructure.database.repo.user_repo import UserRepository
 from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 from infrastructure.database.repo.report_repo import ReportRepository
 
+from states.menu.main_menu_state import MainMenu
 from states.add.prescription_state import PrescriptionFSM
 from keyboard.inline.inline_buttons import get_doctors_inline
+from keyboard.inline.menu_kb import get_main_menu_inline
 from utils.logger.logger_config import logger
 from utils.ui.ui_helper import safe_clear_state
 
@@ -40,7 +42,6 @@ async def final_save_report(
 
     district_name = data.get("district_name")
     road_num = data.get("road_num")
-    apt_name = data.get("apt_name")
     lpu_name = data.get("lpu_name")
     lpu_id = data.get("lpu_id")
     comment = data.get("comms", "")
@@ -127,7 +128,7 @@ async def final_save_report(
                 user=real_name,
                 district=district_name,
                 road=road_num,  # Передаем int
-                lpu=apt_name,
+                lpu=lpu_name,
                 comment=comment
             )
 
@@ -140,10 +141,12 @@ async def final_save_report(
             if items_to_save:
                 await reports_db.save_apothecary_preps(report.id, items_to_save)
 
+            kb = await get_main_menu_inline(user_id, reports_db)
+            await state.set_state(MainMenu.logged_in)
+
             await callback.answer("✅ Отчет по аптеке сохранен!", show_alert=False)
             await callback.message.edit_text(
-                f"✅ Отчет по аптеке <b>{apt_name}</b> успешно сохранен!\n\n"
-                f"Нажмите /start или выберите действие в меню."
+                f"✅ Отчет по аптеке <b>{lpu_name}</b> успешно сохранен!\n\n", reply_markup=kb
             )
             await safe_clear_state(state)
 

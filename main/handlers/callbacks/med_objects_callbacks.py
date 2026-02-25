@@ -10,6 +10,9 @@ from infrastructure.database.repo.report_repo import ReportRepository
 from states.add.prescription_state import PrescriptionFSM
 from keyboard.inline import inline_buttons
 
+# Импорты для работы галочек (мульти-выбор)
+from handlers.add.select_handlers import ensure_prep_items_loaded
+from keyboard.inline.inline_select import build_multi_select_keyboard
 
 router = Router()
 
@@ -94,11 +97,12 @@ async def process_doctor(
         selected_items=[]
     )
 
-    # Загружаем препараты (🔥 ИСПРАВЛЕН ПРЕФИКС НА prep)
-    preps = await pharmacy_repo.get_preps()
-    keyboard = await inline_buttons.build_keyboard_from_items(
-        preps, prefix="prep", state=state, row_width=2, add_new_btn_callback="add_prep"
-    )
+    # === МАГИЯ ГАЛОЧЕК ===
+    # Загружаем препараты через вспомогательную функцию из select_handlers
+    items = await ensure_prep_items_loaded(state, pharmacy_repo)
+
+    # Строим ту самую клавиатуру с мульти-выбором
+    keyboard = build_multi_select_keyboard(items, [], "doc")
 
     # Загружаем историю из новой БД
     last_report = await reports_db.get_last_doctor_report(user_name, doc_name)
@@ -114,7 +118,7 @@ async def process_doctor(
         term = last_report.get('term', '—') if is_dict else getattr(last_report, 'term', '—')
         commentary = last_report.get('commentary', '—') if is_dict else getattr(last_report, 'commentary', '—')
 
-        # Получаем список препаратов (зависит от того, как реализован get_last_doctor_report)
+        # Получаем список препаратов
         preps_data = last_report.get('preps', []) if is_dict else getattr(last_report, 'preps', [])
 
         if preps_data:
@@ -160,7 +164,7 @@ async def process_apothecary(
     await state.update_data(
         apt_id=apt_id,
         lpu_name=apt_name,
-        prefix="apt"  # Добавил префикс, чтобы save_handler понимал, что мы сохраняем аптеку!
+        prefix="apt"
     )
 
     await callback.message.edit_text(

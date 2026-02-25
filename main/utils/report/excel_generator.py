@@ -1,7 +1,28 @@
 import io
+from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+
+def get_val(row, dict_key, orm_key):
+    """
+    Умный извлекатель данных. Понимает и словари, и объекты SQLAlchemy ORM.
+    """
+    if isinstance(row, dict):
+        val = row.get(dict_key)
+    else:
+        val = getattr(row, orm_key, None)
+
+    # Красивое форматирование дат
+    if isinstance(val, datetime):
+        return val.strftime("%d.%m.%Y %H:%M")
+
+    # Если это список (например, список препаратов), склеиваем в строку
+    if isinstance(val, list):
+        return ", ".join([str(i) for i in val])
+
+    return val if val is not None else "—"
 
 
 def create_excel_report(doc_data: list, apt_data: list) -> io.BytesIO:
@@ -16,7 +37,6 @@ def create_excel_report(doc_data: list, apt_data: list) -> io.BytesIO:
     ws1 = wb.active
     ws1.title = "Врачи"
 
-    # Заголовки
     headers1 = [
         "ID", "Дата", "Сотрудник",
         "Район", "Маршрут", "ЛПУ",
@@ -25,24 +45,27 @@ def create_excel_report(doc_data: list, apt_data: list) -> io.BytesIO:
     ]
     ws1.append(headers1)
 
-    # Данные
     if doc_data:
         for row in doc_data:
-            # Превращаем объект строки БД в список значений
-            # Порядок должен совпадать с заголовками!
+            # Используем безопасное извлечение.
+            # ORM ключи могут называться чуть иначе, добавил гибкость:
+            user = get_val(row, 'user_name', 'user')
+            date = get_val(row, 'created_at', 'date')
+            comms = get_val(row, 'commentary', 'commentary') or get_val(row, 'comment', 'comment')
+
             ws1.append([
-                row['id'],
-                row['created_at'],
-                row['user_name'],
-                row['district'],
-                row['road'],
-                row['lpu'],
-                row['doctor_name'],
-                row['doctor_spec'],
-                row['doctor_number'],
-                row['term'],
-                row['preps'],  # Список препаратов
-                row['commentary']
+                get_val(row, 'id', 'id'),
+                date,
+                user,
+                get_val(row, 'district', 'district'),
+                get_val(row, 'road', 'road'),
+                get_val(row, 'lpu', 'lpu'),
+                get_val(row, 'doctor_name', 'doctor_name'),
+                get_val(row, 'doctor_spec', 'doctor_spec'),
+                get_val(row, 'doctor_number', 'doctor_number'),
+                get_val(row, 'term', 'term'),
+                get_val(row, 'preps', 'preps'),  # В БД это может быть строка или список
+                comms
             ])
 
     # ==========================================
@@ -60,55 +83,50 @@ def create_excel_report(doc_data: list, apt_data: list) -> io.BytesIO:
 
     if apt_data:
         for row in apt_data:
+            user = get_val(row, 'user_name', 'user')
+            date = get_val(row, 'created_at', 'date')
+            lpu = get_val(row, 'lpu', 'lpu') or get_val(row, 'apothecary', 'apothecary')
+            comms = get_val(row, 'commentary', 'commentary') or get_val(row, 'comment', 'comment')
+
             ws2.append([
-                row['id'],
-                row['created_at'],
-                row['user_name'],
-                row['district'],
-                row['road'],
-                row['lpu'],  # Название аптеки
-                row['prep_name'],  # Имя препарата из связанной таблицы
-                row['req_qty'],  # Число (float/int)
-                row['rem_qty'],  # Число (float/int)
-                row['commentary']
+                get_val(row, 'id', 'id'),
+                date,
+                user,
+                get_val(row, 'district', 'district'),
+                get_val(row, 'road', 'road'),
+                lpu,
+                get_val(row, 'prep_name', 'prep_name'),
+                get_val(row, 'req_qty', 'req_qty'),
+                get_val(row, 'rem_qty', 'rem_qty'),
+                comms
             ])
 
     # ==========================================
-    # 🎨 ОФОРМЛЕНИЕ (АВТО-ШИРИНА)
+    # 🎨 ОФОРМЛЕНИЕ (АВТО-ШИРИНА И ЦВЕТА)
     # ==========================================
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
 
     for ws in wb.worksheets:
-        # Красим заголовки
         for cell in ws[1]:
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center")
 
-        # Авто-подбор ширины столбцов (FIXED ERROR)
         for col in ws.columns:
             max_length = 0
             column_letter = get_column_letter(col[0].column)
 
             for cell in col:
                 try:
-                    # 🔥 ГЛАВНОЕ ИСПРАВЛЕНИЕ:
-                    # Мы принудительно делаем str(cell.value),
-                    # чтобы len() не падал на числах (float/int)
-                    if cell.value:
+                    if cell.value is not None:
                         cell_len = len(str(cell.value))
                         if cell_len > max_length:
                             max_length = cell_len
                 except:
                     pass
 
-            # Немного запаса ширины
-            adjusted_width = (max_length + 2)
-            # Ограничиваем, чтобы колонка не стала гигантской (макс 50 символов)
-            if adjusted_width > 50:
-                adjusted_width = 50
-
+            adjusted_width = min(max_length + 2, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
 
     # ==========================================

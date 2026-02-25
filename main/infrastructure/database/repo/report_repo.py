@@ -178,6 +178,64 @@ class ReportRepository:
         return output
 
     # ============================================================
+    # ♾️ FULL DUMP (Выгрузка всей базы)
+    # ============================================================
+
+    async def get_all_doctor_reports(self) -> List[dict]:
+        """Выгружает абсолютно все отчеты по врачам (за всё время)"""
+        stmt = (
+            select(MainReport)
+            .options(selectinload(MainReport.preps))
+            .order_by(desc(MainReport.date))
+        )
+
+        result = await self.session.execute(stmt)
+        reports = result.scalars().all()
+
+        return [{
+            "id": r.id,
+            "created_at": r.date,
+            "user_name": r.user,
+            "district": r.district,
+            "road": r.road,
+            "lpu": r.lpu,
+            "doctor_name": r.doc_name,
+            "doctor_spec": r.doc_spec,
+            "doctor_number": r.doc_num,
+            "term": r.term,
+            "commentary": r.commentary,
+            "preps": ", ".join([p.prep for p in r.preps]) if r.preps else ""
+        } for r in reports]
+
+    async def get_all_apothecary_reports(self) -> List[dict]:
+        """Выгружает абсолютно все отчеты по аптекам (за всё время)"""
+        stmt = (
+            select(ApothecaryReport)
+            .options(selectinload(ApothecaryReport.preps))
+            .order_by(desc(ApothecaryReport.date))
+        )
+
+        result = await self.session.execute(stmt)
+        reports = result.scalars().all()
+
+        output = []
+        for r in reports:
+            for p in r.preps:
+                output.append({
+                    "id": r.id,
+                    "created_at": r.date,
+                    "user_name": r.user,
+                    "district": r.district,
+                    "road": r.road,
+                    "lpu": r.apothecary,
+                    "prep_name": p.prep,
+                    "req_qty": p.request,
+                    "rem_qty": p.remaining,
+                    "commentary": r.commentary
+                })
+        return output
+
+    # ============================================================
     # 📋 TASKS (Задачи)
     # ============================================================
 

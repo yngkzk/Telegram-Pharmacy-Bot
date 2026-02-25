@@ -15,7 +15,6 @@ class PharmacyRepository:
     async def get_districts_by_region(self, region_code: str) -> List[District]:
         """Получает список районов для конкретного региона"""
         stmt = select(District).where(District.region == region_code).order_by(District.name)
-        print(region_code)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

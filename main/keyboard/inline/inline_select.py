@@ -8,20 +8,24 @@ from infrastructure.database.repo.pharmacy_repo import PharmacyRepository
 
 def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) -> InlineKeyboardMarkup:
     """
-    Генерация клавиатуры с чекбоксами.
+    Генерация клавиатуры с чекбоксами. Поддерживает как ORM-объекты, так и кортежи (id, name).
     """
     builder = InlineKeyboardBuilder()
-
     selected_set = {str(x) for x in selected_ids}
 
     for item in options:
-        # 1. Адаптация под объекты SQLAlchemy (ORM)
-        try:
-            opt_id = getattr(item, "id")
-            # Ищем атрибут prep (для Medication) или name (если передали что-то другое)
-            name = getattr(item, "prep", getattr(item, "name", "Unknown"))
-        except AttributeError:
-            continue
+        # 1. Умная распаковка данных
+        if isinstance(item, tuple) and len(item) == 2:
+            # Если это кортеж из нашей функции ensure_prep_items_loaded
+            opt_id, name = item
+        else:
+            # Если это ORM-объект напрямую из базы
+            try:
+                opt_id = getattr(item, "id")
+                name = getattr(item, "prep", getattr(item, "name", "Unknown"))
+            except AttributeError:
+                print(f"⚠️ Ошибка: невозможно прочитать данные препарата: {item}")
+                continue
 
         # 2. Статус чекбокса
         is_selected = str(opt_id) in selected_set
@@ -29,7 +33,11 @@ def build_multi_select_keyboard(options: list, selected_ids: list, prefix: str) 
         icon = "✅" if is_selected else "⬜"
         text = f"{icon} {name}"
 
-        # callback: select_doc_5 (где doc - это prefix)
+        # Защита от слишком длинных названий (Telegram ругается на кнопки > 64 символов)
+        if len(text) > 35:
+            text = text[:32] + "..."
+
+        # callback: select_doc_5
         callback_data = f"select_{prefix}_{opt_id}"
 
         builder.button(text=text, callback_data=callback_data)

@@ -60,9 +60,50 @@ async def start_export_flow(callback: types.CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(AdminReportFSM.choose_period, F.data.startswith("period_"))
-async def process_period(callback: types.CallbackQuery, state: FSMContext, user_repo: UserRepository):
+async def process_period(
+        callback: types.CallbackQuery,
+        state: FSMContext,
+        user_repo: UserRepository,
+        reports_db: ReportRepository  # <-- Добавили reports_db сюда!
+):
     mode = callback.data.split("_")[1]
 
+    # === 🔥 НОВАЯ ЛОГИКА: ЗА ВСЁ ВРЕМЯ ===
+    if mode == "alltime":
+        await callback.message.edit_text("⏳ <b>Формирую полную выгрузку за всё время...</b>\nПожалуйста, подождите.")
+
+        try:
+            # Запрашиваем ВСЮ базу без фильтров
+            doc_data = await reports_db.get_all_doctor_reports()
+            apt_data = await reports_db.get_all_apothecary_reports()
+
+            if not doc_data and not apt_data:
+                await callback.message.edit_text("❌ <b>База данных пуста.</b>", reply_markup=get_admin_menu())
+                return await safe_clear_state(state)
+
+            excel_file = create_excel_report(doc_data, apt_data)
+            filename = f"Full_Database_Dump_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+            file_to_send = BufferedInputFile(excel_file.read(), filename=filename)
+
+            await callback.message.answer_document(
+                document=file_to_send,
+                caption="📊 <b>Полная выгрузка базы данных</b> (За всё время)"
+            )
+            await callback.message.answer("Админ-панель:", reply_markup=get_admin_menu())
+
+        except Exception as e:
+            logger.error(f"Full Export Error: {e}")
+            await callback.message.answer(f"❌ Ошибка выгрузки: {e}", reply_markup=get_admin_menu())
+
+        finally:
+            # Удаляем сообщение с часиками и чистим стейт
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            return await safe_clear_state(state)
+
+    # === СТАРАЯ ЛОГИКА: ФИЛЬТРЫ ПО ДАТАМ ===
     today = datetime.now().date()
     start_date = today
     end_date = today
@@ -75,11 +116,9 @@ async def process_period(callback: types.CallbackQuery, state: FSMContext, user_
     elif mode == "month":
         start_date = today.replace(day=1)
 
-    # Сохраняем даты
     await state.update_data(start_date=str(start_date), end_date=str(end_date))
     await state.set_state(AdminReportFSM.choose_employee)
 
-    # 🔥 Используем новый репозиторий для получения ИМЕН пользователей
     users = await user_repo.get_approved_usernames()
 
     await callback.message.edit_text(

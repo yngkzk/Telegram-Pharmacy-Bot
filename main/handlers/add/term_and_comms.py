@@ -2,62 +2,28 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from keyboard.inline import inline_buttons
 
-from utils.logger.logger_config import logger
 from states.add.prescription_state import PrescriptionFSM
-
 
 router = Router()
 
 
 # ============================================================
-# 👨‍⚕️ DOCTOR FLOW: 1. Contract Terms
+# 👨‍⚕️ ВРАЧ: Условия договора
 # ============================================================
 @router.message(PrescriptionFSM.contract_terms)
 async def process_contract_terms(message: types.Message, state: FSMContext):
     terms_text = message.text.strip()
 
-    # 🔥 Перешли на нативный FSM
     await state.update_data(contract_terms=terms_text)
-
-    # Переходим к комментарию
     await state.set_state(PrescriptionFSM.pharmacy_comments)
+
     await message.answer(
         "✍️ <b>Условия приняты.</b>\nТеперь напишите комментарий к визиту (или отправьте '-' если нет):"
     )
 
 
 # ============================================================
-# 💊 PHARMACY FLOW: 1. Quantity (Заявка)
-# ============================================================
-@router.message(PrescriptionFSM.waiting_for_quantity, F.text)
-async def process_quantity(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("🔢 Пожалуйста, введите <b>целое число</b> (например: 10).")
-
-    qty = int(message.text)
-    await state.update_data(quantity=qty)
-
-    await state.set_state(PrescriptionFSM.waiting_for_remaining)
-    await message.answer("📦 <b>Введите остаток</b> (сколько упаковок есть сейчас):")
-
-
-# ============================================================
-# 💊 PHARMACY FLOW: 2. Remaining (Остатки)
-# ============================================================
-@router.message(PrescriptionFSM.waiting_for_remaining, F.text)
-async def process_remaining(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("🔢 Пожалуйста, введите <b>целое число</b>.")
-
-    rem = int(message.text)
-    await state.update_data(remaining=rem)
-
-    await state.set_state(PrescriptionFSM.pharmacy_comments)
-    await message.answer("✍️ <b>Напишите комментарий</b> (или отправьте '-', если нет):")
-
-
-# ============================================================
-# 💬 COMMON: Comments (Handles both Doctor & Pharmacy)
+# 💬 ОБЩЕЕ: Комментарии (Врач и Аптека)
 # ============================================================
 @router.message(PrescriptionFSM.pharmacy_comments)
 async def process_comments(message: types.Message, state: FSMContext):
@@ -69,31 +35,72 @@ async def process_comments(message: types.Message, state: FSMContext):
     await state.update_data(comms=comment_text)
     await state.set_state(PrescriptionFSM.confirmation)
 
-    # Генерируем умное превью для проверки
+    # Вызываем клавиатуру с кнопками "📖 Посмотреть" и "🚀 Загрузить"
+    kb = inline_buttons.get_confirm_inline(mode=True)
+    await message.answer("✅ <b>Данные собраны.</b> Что делаем дальше?", reply_markup=kb)
+
+
+# ============================================================
+# 📖 ПРОСМОТР ОТЧЕТА (Кнопка "Показать")
+# ============================================================
+@router.callback_query(F.data == "show_card", PrescriptionFSM.confirmation)
+async def show_report_card(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     prefix = data.get("prefix", "doc")
 
-    # 🔥 ИСПРАВЛЕНИЕ БАГА: Разделяем превью для врача и аптеки
-    if prefix == "doc":
-        doc_name = data.get("doc_name", "Врач")
-        terms = data.get("contract_terms", "Нет")
+    district = data.get("district_name", "—")
+    road = data.get("road_num", "—")
+    comms = data.get("comms", "—")
+    if not comms:
+        comms = "—"
 
-        preview = (
-            f"📋 <b>Проверка данных:</b>\n"
-            f"👨‍⚕️ Врач: {doc_name}\n"
-            f"📝 Условия: {terms}\n"
-            f"💬 Комментарий: {comment_text if comment_text else '—'}\n\n"
-            f"Всё верно?"
+    if prefix == "doc":
+        doc_name = data.get("doc_name", "—")
+        doc_spec = data.get("doc_spec", "—")
+        lpu_name = data.get("lpu_name", "—")
+        terms = data.get("contract_terms", "—")
+
+        # Собираем препараты
+        selected_ids = data.get("selected_items", [])
+        prep_map = data.get("prep_map", {})
+        preps = [prep_map.get(str(i)) or prep_map.get(int(i)) or f"ID {i}" for i in selected_ids]
+        preps_str = "\n".join([f"• {p}" for p in preps]) if preps else "—"
+
+        text = (
+            f"📋 <b>ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР</b>\n\n"
+            f"📍 <b>Локация:</b> {district} (Маршрут {road})\n"
+            f"🏥 <b>ЛПУ:</b> {lpu_name}\n"
+            f"👨‍⚕️ <b>Врач:</b> {doc_name} ({doc_spec})\n"
+            f"📝 <b>Условия:</b> {terms}\n\n"
+            f"💊 <b>Препараты:</b>\n{preps_str}\n\n"
+            f"💬 <b>Комментарий:</b> {comms}"
         )
     else:
-        # Для аптеки имя может лежать в apt_name или lpu_name
-        apt_name = data.get("apt_name") or data.get("lpu_name") or "Аптека"
+        apt_name = data.get("apt_name") or data.get("lpu_name") or "—"
 
-        preview = (
-            f"📋 <b>Проверка данных:</b>\n"
-            f"🏪 Аптека: {apt_name}\n"
-            f"💬 Комментарий: {comment_text if comment_text else '—'}\n\n"
-            f"Всё верно?"
+        # Собираем препараты с заявками и остатками
+        final_quantities = data.get("final_quantities", {})
+        prep_map = data.get("prep_map", {})
+        preps_str = ""
+
+        for p_id_str, vals in final_quantities.items():
+            name = prep_map.get(str(p_id_str)) or prep_map.get(int(p_id_str)) or f"ID {p_id_str}"
+            preps_str += f"• {name}\n   └ Заявка: {vals['req']} | Остаток: {vals['rem']}\n"
+
+        if not preps_str:
+            preps_str = "—"
+
+        text = (
+            f"📋 <b>ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР</b>\n\n"
+            f"📍 <b>Локация:</b> {district} (Маршрут {road})\n"
+            f"🏪 <b>Аптека:</b> {apt_name}\n\n"
+            f"💊 <b>Препараты:</b>\n{preps_str}\n"
+            f"💬 <b>Комментарий:</b> {comms}"
         )
 
-    await message.answer(preview, reply_markup=inline_buttons.get_confirm_inline())
+    # Обновляем сообщение, оставляя те же кнопки
+    await callback.message.edit_text(
+        text,
+        reply_markup=inline_buttons.get_confirm_inline(mode=True)
+    )
+    await callback.answer()
